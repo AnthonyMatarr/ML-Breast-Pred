@@ -1,0 +1,33 @@
+[project]
+name = "ml-breast-pred"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "func-timeout>=4.3.5",
+    "imblearn>=0.0",
+    "ipykernel>=7.1.0",
+    "jupyter>=1.1.1",
+    "lightgbm>=4.6.0",
+    "matplotlib>=3.10.7",
+    "mlstatkit",
+    "numpy>=2.3.5",
+    "openpyxl>=3.1.5",
+    "optuna>=4.6.0",
+    "pandas>=2.3.3",
+    "pyarrow>=22.0.0",
+    "scikit-learn>=1.7.2",
+    "scikit-posthocs>=0.11.4",
+    "seaborn>=0.13.2",
+    "shap>=0.49.1",
+    "sigfig>=1.3.19",
+    "statkit>=1.1.0",
+    "statsmodels>=0.14.5",
+    "streamlit>=1.52.1",
+    "torch>=2.9.1",
+    "xgboost>=3.1.2",
+]
+
+[tool.uv.sources]
+mlstatkit = { git = "https://github.com/AnthonyMatarr/MLstatkit.git" }
