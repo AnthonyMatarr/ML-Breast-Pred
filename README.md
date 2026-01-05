@@ -1,4 +1,4 @@
-# Development, Validation, and Deployment of a Machine Learning Risk Calculator for 30-Day Complications after mastectomy and delayed breast reconstruction/revision
+# Development, Validation, and Deployment of a Machine Learning Risk Calculator for 30-Day Complications after disease-directed breast surgery
 
 ## Description
 This project implements Logistic Regression, XGBoost, LightGBM, Neural Network, and Stacked Generalization models to predict post-operative complications (Surgical-related, Medical-related, Mortality, Unplanned Reoperation, Venous Thromboembolism) in mastectomy and delayed breast reconstruction/revision patients found in the National Surgical Quality Improvement Program (NSQIP) dataset spanning 2008-2024.
@@ -85,4 +85,5 @@ BASE_PATH = Path("/Users/<user_name>/Downloads/ML-Breast-Pred")
 ## License: MIT
 - Code licensed under MIT
 - No patient data are included
+
 
