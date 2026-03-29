@@ -1,7 +1,7 @@
 # Development, Validation, and Deployment of a Machine Learning Risk Calculator for 30-Day Complications after disease-directed breast surgery
 
 ## Description
-This project implements Logistic Regression, XGBoost, LightGBM, Neural Network, and Stacked Generalization models to predict post-operative complications (Surgical-related, Medical-related, Mortality, Unplanned Reoperation, Venous Thromboembolism) in mastectomy and delayed breast reconstruction/revision patients found in the National Surgical Quality Improvement Program (NSQIP) dataset spanning 2008-2024.
+This project implements five machine learning models (Logistic Regression, XGBoost, LightGBM, Neural Network, and Stacked Generalization) to predict 30-day postoperative complications (Surgical-related, Medical-related, Mortality, Unplanned Reoperation, Venous Thromboembolism) in mastectomy, mastectomy with immediate reconstruction, and delayed breast reconstruction/revision patients found in the American College of Surgeons National Surgical Quality Improvement Program (ACS-NSQIP) dataset spanning 2008-2024.
 
 ## Associated Risk Calculator
 A web application was developed to deploy calibrated XGBoost models for Surgical, Medical, Unplanned Reoperation, Venous Thromboembolism, and LightGBM for Mortality. The interface can be found [here](https://pro-breast.streamlit.app/).
