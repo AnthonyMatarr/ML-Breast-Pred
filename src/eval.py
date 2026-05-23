@@ -27,11 +27,14 @@ class NumpyEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-BIN_NAMES = ["Very Low", "Low", "Medium", "High"]
+BIN_NAME_DICT = {
+    3: ["Low", "Moderate", "High"],
+    4: ["Very Low", "Low", "Moderate", "High"],
+}
 N_BINS = 4
 
 
-def get_logspace_thresholds(y_proba, lower=1e-5, upper=None):
+def get_logspace_thresholds(y_proba, lower=1e-5, upper=None, n_bins=N_BINS):
     """
     Returns thresholds spaced evenly on a log scale within [lower, upper], gracefully handling zero predictions.
     """
@@ -41,36 +44,35 @@ def get_logspace_thresholds(y_proba, lower=1e-5, upper=None):
     lo = max(lower, np.min(y_proba[y_proba > 0]))
     hi = upper
     # Make log-spaced edges
-    edges = np.logspace(np.log10(lo), np.log10(hi), N_BINS + 1)
+    edges = np.logspace(np.log10(lo), np.log10(hi), n_bins + 1)
     thresholds = edges[1:-1]
     return thresholds
 
 
-def get_bin_metrics(y_true, y_proba, thresholds, bin_report_dict, n_bootstraps):
-    """
-    Assumes 4 bins
-    """
-    bin_names = ["Very Low", "Low", "Medium", "High"]
+def get_bin_metrics(
+    y_true, y_proba, thresholds, bin_report_dict, n_bootstraps, n_bins=N_BINS
+):
+    bin_names = BIN_NAME_DICT[n_bins]
     thresholds = np.asarray(thresholds, dtype=float).flatten()
     bin_indices = np.digitize(y_proba, thresholds, right=False)  # 0,1,...,n_bins-1
     tot_n = len(y_true)
     tot_n_pos = np.sum(y_true)
     tot_event_rate = tot_n_pos / tot_n
-    for b in range(N_BINS):  # 4 bins
+    for b in range(n_bins):  # 4 bins
         ## Get labels + probs of allocated to this bin
         mask = bin_indices == b
-        n = mask.sum()
+        n = int(mask.sum())
         in_bin_labels = y_true[mask]
         in_bin_probs = y_proba[mask]
         # ================= Populate bin dict =================
         bin_name = bin_names[b]
         bin_report_dict[bin_name] = {}
         ## Total patients in bin (% of test cohort)
-        bin_report_dict[bin_name]["n_perc"] = {"n": n, "perc": n / tot_n}
+        bin_report_dict[bin_name]["n_perc"] = {"n": n, "perc": float(n / tot_n)}
         ## % of all pos patients in this bin
-        in_bin_n_pos = np.sum(in_bin_labels)
+        in_bin_n_pos = int(np.sum(in_bin_labels))
         # n_perc_all_pos
-        n_perc_pos = in_bin_n_pos / tot_n_pos if tot_n_pos > 0 else np.nan
+        n_perc_pos = float(in_bin_n_pos / tot_n_pos) if tot_n_pos > 0 else np.nan
         bin_report_dict[bin_name]["perc_all_pos"] = {
             "n": in_bin_n_pos,
             "perc": n_perc_pos,
@@ -99,29 +101,33 @@ def get_bin_metrics(y_true, y_proba, thresholds, bin_report_dict, n_bootstraps):
             event_rate_boot = in_bin_labels.mean() if n > 0 else np.nan
             ci_lower = np.nan
             ci_upper = np.nan
-        event_rate = in_bin_labels.mean()
+        event_rate = in_bin_labels.mean() if n > 0 else np.nan
         bin_report_dict[bin_name]["event_rate_w_CIs"] = {
-            "event_rate": event_rate,
-            "lower_CI": ci_lower,
-            "upper_CI": ci_upper,
-            "event_rate_boot": event_rate_boot,
+            "event_rate": float(event_rate),
+            "lower_CI": float(ci_lower),
+            "upper_CI": float(ci_upper),
+            "event_rate_boot": float(event_rate_boot),
         }
         ## Lift
-        bin_report_dict[bin_name]["lift"] = event_rate / tot_event_rate
+        bin_report_dict[bin_name]["lift"] = (
+            float(event_rate / tot_event_rate) if n > 0 else np.nan
+        )
         ## thresholds
         if b == 0:
             threshold_str = f"[0%, {thresholds[0]:.2%})"
-        elif b == N_BINS - 1:
+        elif b == n_bins - 1:
             threshold_str = f"[{thresholds[-1]:.2%}, 100%]"
         else:
             threshold_str = f"[{thresholds[b-1]:.2%}, {thresholds[b]:.2%})"
         bin_report_dict[bin_name]["thresholds"] = threshold_str
         ## mean model output
-        bin_report_dict[bin_name]["mean_model_output"] = in_bin_probs.mean()
+        bin_report_dict[bin_name]["mean_model_output"] = (
+            float(in_bin_probs.mean()) if n > 0 else np.nan
+        )
     return bin_report_dict
 
 
-def plot_risk_bar_dot(bin_report_dict, ax=None, y_max=1.0):
+def plot_risk_bar_dot(bin_report_dict, ax=None, y_max=1.0, n_bins=N_BINS):
     """
     Create risk stratification plot with bar graph showing observed event rates and overlaid mean predictions per bin.
     """
@@ -130,8 +136,8 @@ def plot_risk_bar_dot(bin_report_dict, ax=None, y_max=1.0):
     bins_labels = []
     mean_preds = []
     counts = []
-    for i in range(4):
-        bin_name = BIN_NAMES[i]
+    bin_names = BIN_NAME_DICT[n_bins]
+    for bin_name in bin_names:
         cur_dict = bin_report_dict[bin_name]
         threshold_str = cur_dict["thresholds"]
         bins_labels.append(f"{bin_name}\n{threshold_str}")
@@ -141,9 +147,9 @@ def plot_risk_bar_dot(bin_report_dict, ax=None, y_max=1.0):
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 4))
-    ax.bar(range(N_BINS), event_rates, color="C0", alpha=0.7, label="Event Rate")
-    ax.plot(range(N_BINS), mean_preds, "o-", color="C1", label="Avg. Predicted Risk")
-    ax.set_xticks(range(N_BINS))
+    ax.bar(range(n_bins), event_rates, color="C0", alpha=0.7, label="Event Rate")
+    ax.plot(range(n_bins), mean_preds, "o-", color="C1", label="Avg. Predicted Risk")
+    ax.set_xticks(range(n_bins))
     ax.set_xticklabels(bins_labels, rotation=0)
     ax.set_ylim(0, y_max)
     ax.set_yticks(np.linspace(0, y_max + (y_max / 10), 5))

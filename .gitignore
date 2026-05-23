@@ -1,0 +1,4 @@
+data/
+swarm/
+*__pycache__*
+*feat_eng*/

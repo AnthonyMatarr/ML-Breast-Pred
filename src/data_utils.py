@@ -13,14 +13,16 @@ def import_raw_data_dict(import_dir, verbose=False):
         file_name = file.stem
         file_ext = file.suffix
         if file.is_dir():
+            print(f"Got directory: {file_name}, skipping...")
             continue
         if file_ext == ".parquet":
             if verbose:
                 print(f"Working on file: {file_name}...")
             file_import = pd.read_parquet(file)
         else:
-            print(f"\t File extension must be parquet got {file_ext} instead.")
-            print("\t Skipping file...")
+            print(
+                f"\t File extension must be parquet got {file_ext} instead. Skipping..."
+            )
             continue
         data_dict[file_name] = file_import
     assert len(data_dict) == 17

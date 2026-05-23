@@ -6,6 +6,17 @@ import pandas as pd
 import warnings
 from shutil import rmtree
 import joblib
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import (
+    OneHotEncoder,
+    OrdinalEncoder,
+    MinMaxScaler,
+    FunctionTransformer,
+)
+from sklearn.pipeline import Pipeline
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
+from src.data_utils import get_feature_lists
 
 
 def remove_prefix(df):
@@ -63,28 +74,117 @@ class BMICalculatorArray(BaseEstimator, TransformerMixin):
         return np.array(features)
 
 
-def transform_export_data(
-    X, y, outcome_name, preprocessor, data_path=None, pipeline_path=None
+def get_pipeline(num_cols, nom_cols, ord_cols, bin_cols):
+    ################# Numerical pipeline #################
+    # ====>Impute, calculate BMI, then scale
+    height_idx = num_cols.index("HEIGHT")
+    weight_idx = num_cols.index("WEIGHT")
+    # Only age is ~normal --> best to use this over StandardScaler()
+    num_pipeline = Pipeline(
+        [
+            (
+                "imputer",
+                IterativeImputer(
+                    estimator=None,  # default = BayesianRidge
+                    initial_strategy="median",
+                    max_iter=10,
+                    sample_posterior=False,  # deterministic
+                ),
+            ),
+            ("bmi", BMICalculatorArray(height_idx=height_idx, weight_idx=weight_idx)),
+            ("scaler", MinMaxScaler()),
+        ]
+    )
+    ################# Ordinal pipeline #################
+    # ==============> Separate imputer/encoder for ASA
+    asa_col = ["ASACLAS"]
+    # asa_pipeline = Pipeline([("encoder", OrdinalEncoder(categories=[[1, 2, 3, 4]]))])
+
+    asa_pipeline = Pipeline(
+        steps=[
+            # 1. Imputation on the ASA column
+            (
+                "imputer",
+                IterativeImputer(
+                    estimator=None,  # default = BayesianRidge
+                    initial_strategy="median",
+                    max_iter=10,
+                    sample_posterior=False,  # deterministic
+                ),
+            ),
+            # 2. Round to nearest integer, cast to int
+            (
+                "round_to_int",
+                FunctionTransformer(
+                    clip_and_round_asa,
+                    feature_names_out="one-to-one",
+                ),
+            ),
+            # 3. Ordinal encoding just in case
+            (
+                "encoder",
+                OrdinalEncoder(categories=[[1, 2, 3, 4]]),
+            ),
+        ]
+    )
+
+    # ==============> Separate encoder for all other ordinals (0, 1, 2+)
+    other_ordinal_cols = [col for col in ord_cols if col != "ASACLAS"]
+    num_other_ordinal = len(other_ordinal_cols)
+    other_ordinal_pipeline = Pipeline(
+        [
+            (
+                "encoder",
+                OrdinalEncoder(
+                    categories=[["0", "1", "2+"]]
+                    * num_other_ordinal  # Repeat for each column
+                ),
+            )
+        ]
+    )
+    ################# Nominal pipeline #################
+    # =========> One-hot encode
+    nom_pipeline = Pipeline([("encoder", OneHotEncoder(handle_unknown="ignore"))])
+
+    ################# Combine all preprocessing #################
+    preprocessor = ColumnTransformer(
+        [
+            ("num", num_pipeline, num_cols),
+            ("cat", nom_pipeline, nom_cols),
+            ("ord_asa", asa_pipeline, asa_col),
+            ("ord_other", other_ordinal_pipeline, other_ordinal_cols),
+            ("bin", "passthrough", bin_cols),
+        ]
+    )
+    return preprocessor
+
+
+def transform_export_data_dev(
+    df,
+    x_cols,
+    target_col_name,
+    tst_yr,
+    include_yrs,
+    data_path=None,
+    pipeline_path=None,
 ):
     """
-    Split, preprocess, and export train/val/test datasets for a given outcome.
+    Split development (2008-2023) data into train-val-test (70-15-15)
+    for a given outcome
 
-    Performs stratified train-val-test split (70-15-15), fits the preprocessor on
-    training data, transforms all splits, converts columns to numeric types, and
-    optionally exports the processed datasets and fitted preprocessor to disk.
+    Fits the preprocessor on training data, transforms all splits, converts columns to numeric types,
+    and optionally exports the processed datasets and fitted preprocessor to disk.
 
     Parameters
     ----------
-    X : pd.DataFrame
-        Feature matrix containing predictor variables for the full dataset.
-    y : pd.Series
-        Target variable (binary outcome labels) corresponding to X.
-    outcome_name : str
-        Name identifier for the outcome (e.g., 'asp', 'mort'). Used for file naming
-        and directory structure when saving outputs.
-    preprocessor : sklearn.pipeline.Pipeline or sklearn.compose.ColumnTransformer
-        Scikit-learn preprocessing pipeline to fit on training data and transform
-        all splits. Must implement fit(), transform(), and get_feature_names_out().
+    df : pd.DataFrame
+        Feature matrix containing predictor variables for the full dataset, along with
+        all target variables. Columns will be further subset with `x_cols`
+        Assumes this includes 2024 data (and removes it)
+    x_cols: list[str]
+        Names of predictor variables
+    target_col_name : str
+        Name of target column in X
     data_path : pathlib.Path or str, optional
         Base directory path where processed train/val/test parquet and Excel files
         will be saved. If None, data is not saved to disk. Default: None.
@@ -103,52 +203,37 @@ def transform_export_data(
         - 'X_test': pd.DataFrame - Preprocessed test features
         - 'y_test': pd.Series - Test labels
 
-    Notes
-    -----
-    - Train-val-test split uses 70-15-15 proportions with stratification by outcome.
-    - The preprocessor is fit only on training data to prevent data leakage.
-    - All feature columns are converted to numeric types; conversion failures are logged.
-    - Column name prefixes (e.g., from ColumnTransformer) are removed via remove_prefix().
-    - If output paths exist, existing files/directories are overwritten with a warning.
-    - Saved files use parquet format for features (efficient storage) and Excel for labels.
-
-        Warnings
+    Warnings
     --------
     UserWarning
         Raised when overwriting existing data or preprocessor files.
-
-    Examples
-    --------
-    >>> from sklearn.preprocessing import StandardScaler
-    >>> from sklearn.compose import ColumnTransformer
-    >>>
-    >>> preprocessor = ColumnTransformer([
-    ...     ('scaler', StandardScaler(), ['AGE', 'BMI'])
-    ... ])
-    >>>
-    >>> data_splits = transform_export_data(
-    ...     X=features_df,
-    ...     y=labels_series,
-    ...     outcome_name='mortality',
-    ...     preprocessor=preprocessor,
-    ...     data_path=Path('data/processed'),
-    ...     pipeline_path=Path('models/preprocessors')
-    ... )
-    >>> print(data_splits['X_train'].shape)
     """
-    print("\t Splitting data...")
-    ##Get train set
-    X_train, X_temp, y_train, y_temp = train_test_split(
-        X, y, test_size=0.3, random_state=SEED, stratify=y
+    df_dev = df[df["OPERYR"].isin(include_yrs)]
+    df_test = df[df["OPERYR"] == tst_yr]
+    df_exclude = df[(df["OPERYR"] != tst_yr) & (~df["OPERYR"].isin(include_yrs))]
+    assert len(df_dev) + len(df_test) + len(df_exclude)
+    df_X_dev = df_dev[x_cols].copy()
+    X_test = df_test[x_cols].copy()
+    df_y_dev = df_dev[target_col_name].copy()
+    y_test = df_test[target_col_name].copy()
+
+    # split into train-temp sets (80-20)
+    X_train, X_val, y_train, y_val = train_test_split(
+        df_X_dev, df_y_dev, train_size=0.8, random_state=SEED, stratify=df_y_dev
     )
-    ##Get val + test set
-    X_val, X_test, y_val, y_test = train_test_split(
-        X_temp, y_temp, test_size=0.5, random_state=SEED, stratify=y_temp
+
+    ## Get processor
+    feat_list_dict = get_feature_lists(X_train)
+    preprocessor = get_pipeline(
+        num_cols=feat_list_dict["numerical_cols"],
+        nom_cols=feat_list_dict["nominal_cols"],
+        ord_cols=feat_list_dict["ordinal_cols"],
+        bin_cols=feat_list_dict["binary_cols"],
     )
-    print("\t Fitting preprocessor...")
+    ## Fit processor on train
     preprocessor.fit(X_train)
     feature_names = preprocessor.get_feature_names_out()
-    print("\t Transforming train, val, and test sets...")
+    ## Transform all
     X_train_transformed = np.array(preprocessor.transform(X_train))
     X_train_transformed = pd.DataFrame(X_train_transformed, columns=feature_names)
     X_train_transformed = remove_prefix(X_train_transformed)
@@ -168,8 +253,7 @@ def transform_export_data(
     y_val.reset_index(drop=True, inplace=True)
     X_test_transformed.reset_index(drop=True, inplace=True)
     y_test.reset_index(drop=True, inplace=True)
-    print("\t Making all columns numeric...")
-    ## Make all columns numeric for ML models
+
     for col in X_train_transformed.columns:
         try:
             X_train_transformed[col] = pd.to_numeric(X_train_transformed[col])
@@ -190,8 +274,7 @@ def transform_export_data(
 
     ### Save processed data ###
     if data_path:
-        print("\t Saving processed data...")
-        data_path = data_path / outcome_name
+        data_path = data_path / target_col_name
         if data_path.exists():
             warnings.warn(f"Over-writing tabular data at path: {data_path}")
             rmtree(data_path)
@@ -204,15 +287,167 @@ def transform_export_data(
         y_val.to_excel(data_path / "y_val.xlsx")
         X_test_transformed.to_parquet(data_path / "X_test.parquet")
         y_test.to_excel(data_path / "y_test.xlsx")
+
     ### Save fitted preprocessor/pipeline ###
     if pipeline_path:
-        print("\t Saving pipeline...")
-        preprocessor_path = pipeline_path / f"{outcome_name}_pipeline.joblib"
+        preprocessor_path = pipeline_path / f"{target_col_name}_pipeline.joblib"
         if preprocessor_path.exists():
             warnings.warn(f"Over-writing tabular data at path: {data_path}")
             preprocessor_path.unlink()
         preprocessor_path.parent.mkdir(exist_ok=True, parents=True)
         joblib.dump(preprocessor, preprocessor_path, compress=3)
+
+    return {
+        "X_train": X_train_transformed,
+        "y_train": y_train,
+        "X_val": X_val_transformed,
+        "y_val": y_val,
+        "X_test": X_test_transformed,
+        "y_test": y_test,
+    }
+
+
+def transform_export_data_full(
+    df,
+    x_cols,
+    target_col_name,
+    data_path=None,
+    pipeline_path=None,
+):
+    """
+    Split, preprocess, and export train/val/test datasets for a given outcome.
+
+    Splits into train (OperYr: 2008-2021), val (OperYr 2022-2023) and evaluation (OpYr: 2024) data.
+
+    Fits the preprocessor on training data, transforms all splits, converts columns to numeric types,
+    and optionally exports the processed datasets and fitted preprocessor to disk.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Feature matrix containing predictor variables for the full dataset, along with
+        all target variables. Columns will be further subset with `x_cols`
+    x_cols: list[str]
+        Names of predictor variables
+    target_col_name : str
+        Name of target column in X
+    data_path : pathlib.Path or str, optional
+        Base directory path where processed train/val/test parquet and Excel files
+        will be saved. If None, data is not saved to disk. Default: None.
+    pipeline_path : pathlib.Path or str, optional
+        Directory path where the fitted preprocessor will be saved as a compressed
+        joblib file. If None, preprocessor is not saved to disk. Default: None.
+
+    Returns
+    -------
+    dict
+        Dictionary containing six DataFrames/Series with keys:
+        - 'X_train': pd.DataFrame - Preprocessed training features
+        - 'y_train': pd.Series - Training labels
+        - 'X_val': pd.DataFrame - Preprocessed validation features
+        - 'y_val': pd.Series - Validation labels
+        - 'X_test': pd.DataFrame - Preprocessed test features
+        - 'y_test': pd.Series - Test labels
+
+    Warnings
+    --------
+    UserWarning
+        Raised when overwriting existing data or preprocessor files.
+    """
+    df_sub = df[df["OPERYR"] >= 2014]
+    train_years = list(range(2014, 2022))  # 2014-2021
+    train_set = df_sub[df_sub["OPERYR"].isin(train_years)]
+    val_set = df_sub[df_sub["OPERYR"].isin([2022, 2023])]  # 2022-2023
+    test_set = df_sub[df_sub["OPERYR"] == 2024]  # 2024
+    assert len(train_set) + len(val_set) + len(test_set) == len(df_sub)
+
+    X_train = train_set[x_cols].copy()
+    y_train = train_set[target_col_name].copy()
+
+    X_val = val_set[x_cols].copy()
+    y_val = val_set[target_col_name].copy()
+
+    X_test = test_set[x_cols].copy()
+    y_test = test_set[target_col_name].copy()
+    ## Will be the same for every outcome, but initialize here for simplicity
+    test_ids = test_set["CASEID"].copy()
+
+    ## Get processor
+    feat_list_dict = get_feature_lists(X_train)
+    preprocessor = get_pipeline(
+        num_cols=feat_list_dict["numerical_cols"],
+        nom_cols=feat_list_dict["nominal_cols"],
+        ord_cols=feat_list_dict["ordinal_cols"],
+        bin_cols=feat_list_dict["binary_cols"],
+    )
+    preprocessor.fit(X_train)
+    feature_names = preprocessor.get_feature_names_out()
+
+    X_train_transformed = np.array(preprocessor.transform(X_train))
+    X_train_transformed = pd.DataFrame(X_train_transformed, columns=feature_names)
+    X_train_transformed = remove_prefix(X_train_transformed)
+
+    X_val_transformed = np.array(preprocessor.transform(X_val))
+    X_val_transformed = pd.DataFrame(X_val_transformed, columns=feature_names)
+    X_val_transformed = remove_prefix(X_val_transformed)
+
+    X_test_transformed = np.array(preprocessor.transform(X_test))
+    X_test_transformed = pd.DataFrame(X_test_transformed, columns=feature_names)
+    X_test_transformed = remove_prefix(X_test_transformed)
+
+    # Reset index
+    X_train_transformed.reset_index(drop=True, inplace=True)
+    y_train.reset_index(drop=True, inplace=True)
+    X_val_transformed.reset_index(drop=True, inplace=True)
+    y_val.reset_index(drop=True, inplace=True)
+    X_test_transformed.reset_index(drop=True, inplace=True)
+    y_test.reset_index(drop=True, inplace=True)
+    test_ids.reset_index(drop=True, inplace=True)
+
+    for col in X_train_transformed.columns:
+        try:
+            X_train_transformed[col] = pd.to_numeric(X_train_transformed[col])
+        except Exception as e:
+            print(f"Column {col} failed: {e}")
+
+    for col in X_val_transformed.columns:
+        try:
+            X_val_transformed[col] = pd.to_numeric(X_val_transformed[col])
+        except Exception as e:
+            print(f"Column {col} failed: {e}")
+
+    for col in X_test_transformed.columns:
+        try:
+            X_test_transformed[col] = pd.to_numeric(X_test_transformed[col])
+        except Exception as e:
+            print(f"Column {col} failed: {e}")
+
+    ### Save processed data ###
+    if data_path:
+        data_path = data_path / target_col_name
+        if data_path.exists():
+            warnings.warn(f"Over-writing tabular data at path: {data_path}")
+            rmtree(data_path)
+        data_path.mkdir(exist_ok=False, parents=True)
+
+        ## Save transformed data
+        X_train_transformed.to_parquet(data_path / "X_train.parquet")
+        y_train.to_excel(data_path / "y_train.xlsx")
+        X_val_transformed.to_parquet(data_path / "X_val.parquet")
+        y_val.to_excel(data_path / "y_val.xlsx")
+        X_test_transformed.to_parquet(data_path / "X_test.parquet")
+        y_test.to_excel(data_path / "y_test.xlsx")
+        test_ids.to_excel(data_path / "test_ids.xlsx")
+
+    ### Save fitted preprocessor/pipeline ###
+    if pipeline_path:
+        preprocessor_path = pipeline_path / f"{target_col_name}_pipeline.joblib"
+        if preprocessor_path.exists():
+            warnings.warn(f"Over-writing tabular data at path: {data_path}")
+            preprocessor_path.unlink()
+        preprocessor_path.parent.mkdir(exist_ok=True, parents=True)
+        joblib.dump(preprocessor, preprocessor_path, compress=3)
+
     return {
         "X_train": X_train_transformed,
         "y_train": y_train,
