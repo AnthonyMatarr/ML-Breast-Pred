@@ -1,9 +1,11 @@
 import warnings
+
+warnings.filterwarnings("ignore", category=ExperimentalWarning)
 import argparse
 from datetime import datetime
 
 
-from src.data_utils import get_data
+from src.data_utils import get_data, export_data
 from src.eval import get_logspace_thresholds, get_bin_metrics, plot_risk_bar_dot
 
 from sklearn.metrics import average_precision_score, roc_auc_score
@@ -14,12 +16,12 @@ from sklearn.model_selection import StratifiedKFold
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+
 import lightgbm as lgb
 from pathlib import Path
+
 import optuna
 from optuna.exceptions import ExperimentalWarning
-
-warnings.filterwarnings("ignore", category=ExperimentalWarning)
 
 #### GLOBALS ####
 EARLY_STOP_ROUNDS = 50
@@ -61,11 +63,11 @@ def get_feat_groups(is_cancer):
             "RACE_otherUnknown",
         ],
         "DIABETES": ["DIABETES_INSULIN", "DIABETES_NO", "DIABETES_ORAL"],
-        # "RENAFAIL": ["RENAFAIL_No", "RENAFAIL_Unknown_21", "RENAFAIL_Yes"],
+        # "RENAFAIL": ["RENAFAIL_No", "RENAFAIL_Unknown_21", "RENAFAIL_Yes"], #missing so left out of useable feats
         "STEROID": ["STEROID"],
-        # "DYSPNEA": ["DYSPNEA_No", "DYSPNEA_Unknown_21_24", "DYSPNEA_Yes"],
-        # "WNDINF": ["WNDINF_No", "WNDINF_Unknown_21_24", "WNDINF_Yes"],
-        # "WTLOSS": ["WTLOSS_No", "WTLOSS_Unknown_21_24", "WTLOSS_Yes"],
+        # "DYSPNEA": ["DYSPNEA_No", "DYSPNEA_Unknown_21_24", "DYSPNEA_Yes"], #missing so left out of useable feats
+        # "WNDINF": ["WNDINF_No", "WNDINF_Unknown_21_24", "WNDINF_Yes"], #missing so left out of useable feats
+        # "WTLOSS": ["WTLOSS_No", "WTLOSS_Unknown_21_24", "WTLOSS_Yes"], #missing so left out of useable feats
         "SURGINDICD": [
             "SURGINDICD_ABBREASTICD",
             "SURGINDICD_ABSICD",
@@ -372,27 +374,6 @@ def get_drop_cols(perm_imp_df, perc_per_iter, feature_dict):
     for group in groups_to_remove:
         cols_to_remove += feature_dict[group]
     return cols_to_remove
-
-
-def export_data(data_to_export, export_path):
-    if export_path.exists():
-        export_path.unlink()
-    export_path.parent.mkdir(exist_ok=True, parents=True)
-
-    file_type = export_path.suffix
-    if file_type == ".parquet":
-        data_to_export.to_parquet(export_path)
-    elif file_type == ".tsv":
-        data_to_export.to_csv(export_path, sep="\t")
-    elif file_type == ".csv":
-        data_to_export.to_csv(export_path)
-    elif file_type == ".xlsx":
-        data_to_export.to_excel(export_path)
-    elif file_type == ".pdf":
-        data_to_export.savefig(export_path, bbox_inches="tight")
-    else:
-        raise ValueError(f"Unrecognized file type: {file_type}")
-    assert export_path.exists()
 
 
 def calibrate_model(X, y, n_splits, seed, model, n_cv_jobs):

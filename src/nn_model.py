@@ -1,17 +1,19 @@
+## nn_model.py
 from src.config import SEED
 
 import pandas as pd
 import numpy as np
+import math
 
 import torch
 import torch.optim as optim
 import torch.nn.init as init
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
-
-from sklearn.metrics import roc_auc_score
-from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.model_selection import train_test_split
+
+from sklearn.metrics import roc_auc_score, average_precision_score
+from sklearn.base import BaseEstimator, ClassifierMixin
 
 
 class TabularDataset(Dataset):
@@ -27,19 +29,16 @@ class TabularDataset(Dataset):
         return self.X.shape[1]
 
     def __getitem__(self, idx):
-        x = self.X[idx]
-        y = self.y[idx]
-        return x, y
+        return self.X[idx], self.y[idx]
 
 
-def get_activation(name, trial=None):
+def get_activation(name, neg_slope=0.01):
     if name == "relu":
         return nn.ReLU()
     elif name == "leaky_relu":
-        slope = trial.suggest_float("neg_slope", 1e-3, 1e1, log=True) if trial else 0.01
-        return nn.LeakyReLU(negative_slope=slope)
+        return nn.LeakyReLU(negative_slope=neg_slope)
     else:
-        raise ValueError(f"Unknown activation {name}")
+        raise ValueError(f"Unknown activation '{name}'")
 
 
 class MLP(nn.Module):
@@ -52,41 +51,32 @@ class MLP(nn.Module):
         weight_init_scheme="xavier_uniform",
         bias_init=0.0,
     ):
-
         super().__init__()
         if len(dropouts) != len(hidden_size_list):
             raise ValueError(
-                f"Expected dropouts to have same length as hidden states ({len(hidden_size_list)}), got {len(dropouts)} instead"
+                f"dropouts length ({len(dropouts)}) must match "
+                f"hidden_size_list length ({len(hidden_size_list)})"
             )
-
         layers = []
         prev = in_dim
-        ########## Build Skeleton #############
         for h, p, act in zip(hidden_size_list, dropouts, activation_list):
             layers.append(nn.Linear(prev, h))
+            layers.append(nn.BatchNorm1d(h))
             layers.append(act)
             if p and p > 0:
                 layers.append(nn.Dropout(p))
             prev = h
-        # Output node
         layers.append(nn.Linear(prev, 1))
-        # Build backbone
         self.net = nn.Sequential(*layers)
-        self._init_weights(init_scheme=weight_init_scheme, bias_init=bias_init)
+        self._init_weights(weight_init_scheme, bias_init)
 
-    def _init_weights(
-        self, init_scheme: str = "xavier_uniform", bias_init: float = 0.0
-    ):
+    def _init_weights(self, init_scheme, bias_init):
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                ### Weight initialization ###
                 if init_scheme == "xavier_uniform":
-                    # Good default when using ReLU/ELU/Tanh with fan_avg scaling
                     init.xavier_uniform_(m.weight)
                 elif init_scheme == "kaiming_uniform":
-                    # Good with ReLU-like activations (uses fan_in scaling)
                     init.kaiming_uniform_(m.weight, nonlinearity="relu")
-                ### Bias initialization ###
                 nn.init.constant_(m.bias, bias_init)
 
     def forward(self, x):
@@ -101,20 +91,22 @@ class TorchNNClassifier(ClassifierMixin, BaseEstimator):
         activation_name,
         lr=1e-3,
         weight_decay=0,
-        optimizer_str="adam",
-        epochs=30,
+        optimizer_str="adamw",
+        epochs=500,  # ceiling when early_stopping=True
         batch_size=64,
         weight_init_scheme="xavier_uniform",
         bias_init=0.0,
         device="cpu",
         verbose=0,
         seed=SEED,
-        # -- Early stopping --
-        early_stopping=False,
-        es_patience=10,
+        neg_slope=0.01,
+        # ── Early stopping ────────────────────────────────────────────────────
+        early_stopping=True,
+        es_patience=20,
         es_min_delta=0.0,
-        val_split=0.2,
-        monitor="auc",
+        val_split=0.15,
+        monitor="auprc",
+        pos_weight=1,
     ):
         self.hidden_size_list = hidden_size_list
         self.dropouts = dropouts
@@ -129,41 +121,73 @@ class TorchNNClassifier(ClassifierMixin, BaseEstimator):
         self.device = device
         self.verbose = verbose
         self.seed = seed
-        # -- early stopping --
+        self.neg_slope = neg_slope
+        self.pos_weight = pos_weight
         self.early_stopping = early_stopping
         self.es_patience = es_patience
         self.es_min_delta = es_min_delta
         self.val_split = val_split
-        if monitor not in ("auc", "loss"):
-            raise ValueError("monitor must be 'auc' or 'loss'")
+        if monitor not in ["auroc", "auprc", "loss"]:
+            raise ValueError('monitor must be one of ["auroc", "auprc", "loss"]')
         self.monitor = monitor
-
         self.model_ = None
-        self._fit_X = None
-        self._fit_y = None
 
-    def _make_optimizer(self, model):
-        if self.optimizer_str.lower() == "adamw":
-            return optim.AdamW(
-                model.parameters(), lr=self.lr, weight_decay=self.weight_decay
-            )
-        elif self.optimizer_str.lower() == "adam":
-            return optim.Adam(
-                model.parameters(), lr=self.lr, weight_decay=self.weight_decay
-            )
-        else:
-            raise ValueError(f"Unknown optimizer_str: {self.optimizer_str}")
+    def _make_loader(self, X, y, shuffle):
+        ds = TabularDataset(X, y)
+        g = torch.Generator()
+        g.manual_seed(self.seed)
+        return DataLoader(
+            ds,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            generator=g if shuffle else None,
+        )
 
-    def fit(self, X, y):
-        self._fit_X = X.copy()
-        self._fit_y = y.copy()
+    def _eval_val(self, model, val_loader, criterion):
+        """Returns (mean_val_loss, metric | None)."""
+        model.eval()
+        val_losses, all_logits, all_targets = [], [], []
+        with torch.no_grad():
+            for data, target in val_loader:
+                data, target = data.to(self.device), target.to(self.device)
+                logits = model(data)
+                val_losses.append(criterion(logits, target).item())
+                all_logits.append(logits.detach().cpu())
+                all_targets.append(target.detach().cpu())
+
+        mean_loss = float(np.mean(val_losses))
+        all_logits = torch.cat(all_logits)
+        all_targets = torch.cat(all_targets)
+        proba = torch.sigmoid(all_logits).numpy()
+        targets_np = all_targets.numpy()
+
+        if self.monitor == "auroc":
+            metric = (
+                roc_auc_score(targets_np, proba)
+                if len(np.unique(targets_np)) > 1
+                else -mean_loss
+            )
+        elif self.monitor == "auprc":
+            metric = (
+                average_precision_score(targets_np, proba)
+                if len(np.unique(targets_np)) > 1
+                else -mean_loss
+            )
+        else:  # loss
+            metric = -mean_loss
+
+        return mean_loss, metric
+
+    def fit(self, X, y, eval_set=None):
+        torch.set_num_threads(1)  # prevents oversubscription w/ joblib workers
+        torch.manual_seed(self.seed)
         self.feature_names_in_ = np.array(X.columns)
         in_dim = X.shape[1]
 
-        # Instantiate new activation for each layer
-        acts = [get_activation(self.activation_name) for _ in self.hidden_size_list]
-
-        # Build model and send to device
+        acts = [
+            get_activation(self.activation_name, self.neg_slope)
+            for _ in self.hidden_size_list
+        ]
         model = MLP(
             self.hidden_size_list,
             in_dim,
@@ -173,211 +197,172 @@ class TorchNNClassifier(ClassifierMixin, BaseEstimator):
             self.bias_init,
         ).to(self.device)
 
-        ## only need this if using >1 GPU
-        if (
-            isinstance(self.device, str)
-            and self.device.startswith("cuda")
-            and torch.cuda.is_available()
-            and torch.cuda.device_count() > 1
-        ):
-            # Use ALL visible GPUs in this process
-            model = nn.DataParallel(model)
+        ## Class-prior bias init
+        pos_rate = np.clip(float(np.mean(y > 0)), 1e-7, 1 - 1e-7)
+        log_odds = math.log(pos_rate / (1.0 - pos_rate))
+        output_linear = [m for m in model.modules() if isinstance(m, nn.Linear)][-1]
+        nn.init.constant_(output_linear.bias, log_odds)
 
-        optimizer = self._make_optimizer(model)
-        criterion = nn.BCEWithLogitsLoss()
+        ## Class weighted for loss
+        pos_weight_tensor = torch.tensor(
+            [self.pos_weight], dtype=torch.float32, device=self.device
+        )
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
 
-        # -- train/val split for early stopping --
-        if self.early_stopping and self.val_split > 0.0:
-            X_train, X_val, y_train, y_val = train_test_split(
-                X,
-                y,
-                test_size=self.val_split,
-                random_state=self.seed,
-                stratify=y,
+        optimizer = (
+            optim.AdamW(model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+            if self.optimizer_str == "adamw"
+            else optim.Adam(
+                model.parameters(), lr=self.lr, weight_decay=self.weight_decay
             )
-            ds_train = TabularDataset(X_train, y_train)
-            ds_val = TabularDataset(X_val, y_val)
+        )
 
-            g = torch.Generator()
-            g.manual_seed(self.seed)
-            train_loader = DataLoader(
-                ds_train,
-                batch_size=self.batch_size,
-                shuffle=True,
-                generator=g,
-                pin_memory=True if "cuda" in str(self.device) else False,
-                # num_workers=5, #only for tuning
-                num_workers=0,
-            )
-            val_loader = DataLoader(
-                ds_val,
-                batch_size=self.batch_size,
-                shuffle=False,
-                pin_memory=True if "cuda" in str(self.device) else False,
-                # num_workers=5, #only for tuning
-                num_workers=0,
-            )
+        # ── EARLY STOPPING
+        if self.early_stopping:
+            if eval_set is not None:
+                X_val_es, y_val_es = eval_set[0]
+                X_tr, y_tr = X, y
+            else:
+                X_tr, X_val_es, y_tr, y_val_es = train_test_split(
+                    X,
+                    y,
+                    test_size=self.val_split,
+                    random_state=self.seed,
+                    stratify=y,
+                )
+            train_loader = self._make_loader(X_tr, y_tr, shuffle=True)
+            val_loader = self._make_loader(X_val_es, y_val_es, shuffle=False)
         else:
-            ## no early stopping
-            # Dataset
-            ds = TabularDataset(X, y)
+            train_loader = self._make_loader(X, y, shuffle=True)
+            val_loader = None
 
-            g = torch.Generator()
-            g.manual_seed(self.seed)
-            train_loader = DataLoader(
-                ds,
-                batch_size=self.batch_size,
-                shuffle=True,
-                generator=g,
-                # only useful if using GPU
-                pin_memory=True if "cuda" in str(self.device) else False,
-                # num_workers=5, #only for tuning
-                num_workers=0,
-            )
-            val_loader = None  # not used
-
-        # =====================> Train loop
+        # ── Train loop ────────────────────────────────────────────────────────
         best_metric = None
         best_state_dict = None
+        best_epoch = None
         patience_counter = 0
 
         for epoch in range(self.epochs):
-            ## Train
             model.train()
             for data, target in train_loader:
-                data = data.to(self.device, non_blocking=True)
-                target = target.to(self.device, non_blocking=True)
+                data, target = data.to(self.device), target.to(self.device)
                 optimizer.zero_grad()
-                output = model(data)
-                loss = criterion(output, target)
-                loss.backward()
+                criterion(model(data), target).backward()
                 optimizer.step()
-            # =========> Early stopping
-            if self.early_stopping and val_loader is not None:
-                model.eval()
-                val_losses = []
-                all_logits = []
-                all_targets = []
-                with torch.no_grad():
-                    for data, target in val_loader:
-                        data = data.to(self.device, non_blocking=True)
-                        target = target.to(self.device, non_blocking=True)
-                        logits = model(data)
-                        v_loss = criterion(logits, target)
-                        val_losses.append(v_loss.item())
 
-                        all_logits.append(logits.detach().cpu())
-                        all_targets.append(target.detach().cpu())
+            if not self.early_stopping:
+                continue
 
-                mean_val_loss = float(np.mean(val_losses))
-                if self.monitor == "loss":
-                    current_metric = -mean_val_loss  # higher is better
-                else:  # monitor == "auc"
-                    all_logits = torch.cat(all_logits)
-                    all_targets = torch.cat(all_targets)
-                    val_proba = torch.sigmoid(all_logits).numpy()
-                    val_targets_np = all_targets.numpy()
-                    # guard against degenerate cases
-                    if len(np.unique(val_targets_np)) > 1:
-                        current_metric = roc_auc_score(val_targets_np, val_proba)
-                    else:
-                        current_metric = -mean_val_loss  # fallback
-                # check improvement
-                if (
-                    best_metric is None
-                    or current_metric > best_metric + self.es_min_delta
-                ):
-                    best_metric = current_metric
-                    best_state_dict = {
-                        k: v.cpu().clone() for k, v in model.state_dict().items()
-                    }
-                    patience_counter = 0
-                else:
-                    patience_counter += 1
+            ### EARLY STOPPING MONITOR ###
+            val_loss, current_metric = self._eval_val(model, val_loader, criterion)
 
+            improved = best_metric is None or current_metric > (
+                best_metric + (abs(best_metric) * self.es_min_delta)
+            )
+            if improved:
+                best_metric = current_metric
+                best_state_dict = {
+                    k: v.cpu().clone() for k, v in model.state_dict().items()
+                }
+                best_epoch = epoch
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+            if self.verbose:
+                print(
+                    f"Epoch {epoch+1}/{self.epochs} | "
+                    f"val_loss={val_loss:.4f} | "
+                    f"{self.monitor}={current_metric:.4f} | "
+                    f"patience={patience_counter}/{self.es_patience}"
+                )
+
+            if patience_counter >= self.es_patience:
                 if self.verbose:
-                    print(
-                        f"Epoch {epoch+1}/{self.epochs} - "
-                        f"val_loss={mean_val_loss:.4f}, "
-                        f"{self.monitor}={current_metric:.4f}, "
-                        f"patience={patience_counter}/{self.es_patience}"
-                    )
+                    print(f"Early stopping at epoch {epoch+1}.")
+                break
 
-                if patience_counter >= self.es_patience:
-                    if self.verbose:
-                        print("Early stopping triggered.")
-                    break  # stop training loop
-        # restore best weights if stopped early
         if self.early_stopping and best_state_dict is not None:
             model.load_state_dict(best_state_dict)
+
         self.model_ = model
-        self.classes_ = np.unique(y)  # Needed for sklearn ClassifierMixin
-        self._fit_X = None
-        self._fit_y = None
+        self.classes_ = np.unique(y)
+
+        if self.early_stopping:
+            if best_epoch is not None:
+                ## Get optimal epoch # (1-indexed)
+                self.best_iteration_ = best_epoch + 1
+            else:
+                ## Fall back to self.epochs if early stopping never triggered (or never improved)
+                self.best_iteration_ = self.epochs
+        else:
+            ## If early stopping not used
+            self.best_iteration_ = None
         return self
 
     def predict_proba(self, X):
-        self.model_.eval()  # type: ignore
+        if self.model_ is None:
+            raise ValueError("Call fit() before predict_proba()")
+        self.model_.eval()
         with torch.no_grad():
-            if isinstance(X, pd.DataFrame):
-                X_tensor = torch.tensor(X.values, dtype=torch.float32).to(self.device)
-            else:
-                X_tensor = torch.tensor(X, dtype=torch.float32).to(self.device)
-            logits = self.model_(X_tensor)  # type: ignore
-            proba = torch.sigmoid(logits)
+            X_tensor = (
+                torch.tensor(X.values, dtype=torch.float32)
+                if isinstance(X, pd.DataFrame)
+                else torch.tensor(X, dtype=torch.float32)
+            ).to(self.device)
+            proba = torch.sigmoid(self.model_(X_tensor))
             return np.column_stack((1 - proba.cpu().numpy(), proba.cpu().numpy()))
 
     def predict(self, X):
-        proba = self.predict_proba(X)[:, 1]
-        return (proba >= 0.5).astype(int)
+        return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
 
     def score(self, X, y):
-        y_proba = self.predict_proba(X)[:, 1]
-        return roc_auc_score(y, y_proba)
+        return average_precision_score(y, self.predict_proba(X)[:, 1])
 
 
 def load_nn_clf(data_path, in_dim, device):
+    """
+    Load an INFERENCE ONLY saved nn model from memory
+    """
     data = torch.load(data_path, map_location="cpu", weights_only=False)
     h_params = data["h_params"]
     state_dict = data["state_dict"]
     feature_names_in_ = data["feature_names_in_"]
-    hidden_size_list = [h_params["hl_1"], h_params["hl_2"]]
-    dropouts = [h_params["dr_1"], h_params["dr_2"]]
-    if "hl_3" in h_params and "dr_3" in h_params:
-        hidden_size_list.append(h_params["hl_3"])
-        dropouts.append(h_params["dr_3"])
-    if "hl_4" in h_params and "dr_4" in h_params:
-        hidden_size_list.append(h_params["hl_4"])
-        dropouts.append(h_params["dr_4"])
-    activation_name = h_params["act_func_str"]
-    num_epochs = h_params["num_epochs"]
-    lr = h_params["lr"]
-    weight_decay = h_params["weight_decay"]
-    batch_size = h_params["batch_size"]
+
+    hidden_size_list = [h_params["hl_1"]]
+    dropouts = [h_params["dr_1"]]
+
+    for layer_size in ["2", "3"]:
+        if f"hl_{layer_size}" in h_params:
+            hidden_size_list.append(h_params[f"hl_{layer_size}"])
+            dropouts.append(h_params[f"dr_{layer_size}"])
 
     clf = TorchNNClassifier(
         hidden_size_list=hidden_size_list,
         dropouts=dropouts,
-        activation_name=activation_name,
-        epochs=num_epochs,
-        lr=lr,
-        weight_decay=weight_decay,
-        batch_size=batch_size,
+        activation_name=h_params["act_func_str"],
+        epochs=data.get("epochs", 500),
+        # lr=h_params["lr"],
+        # weight_decay=h_params["weight_decay"],
+        # batch_size=h_params["batch_size"],
+        neg_slope=h_params.get("neg_slope", 0.01),
         device=device,
+        early_stopping=False,  # weights already trained; skip fit logic on load
     )
 
-    acts = [get_activation(clf.activation_name) for _ in clf.hidden_size_list]
+    acts = [
+        get_activation(clf.activation_name, clf.neg_slope) for _ in clf.hidden_size_list
+    ]
+    assert in_dim == len(feature_names_in_)
     clf.model_ = MLP(
-        hidden_size_list=clf.hidden_size_list,
-        in_dim=in_dim,
-        dropouts=clf.dropouts,
-        activation_list=acts,
-        weight_init_scheme=clf.weight_init_scheme,
-        bias_init=clf.bias_init,
+        clf.hidden_size_list,
+        in_dim,
+        clf.dropouts,
+        acts,
+        clf.weight_init_scheme,
+        clf.bias_init,
     ).to(device)
-
     clf.model_.load_state_dict(state_dict)
-    clf.model_.to(device)
     clf.model_.eval()
     clf.classes_ = np.array([0, 1])
     clf.feature_names_in_ = feature_names_in_

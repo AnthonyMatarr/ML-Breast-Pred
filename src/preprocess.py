@@ -1,11 +1,16 @@
-import numpy as np
-from sklearn.base import BaseEstimator, TransformerMixin
-from src.config import SEED
-from sklearn.model_selection import train_test_split
-import pandas as pd
+# preprocess.py
 import warnings
 from shutil import rmtree
 import joblib
+
+from src.data_utils import get_feature_lists
+from src.config import SEED
+
+import numpy as np
+import pandas as pd
+
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import (
     OneHotEncoder,
@@ -16,7 +21,6 @@ from sklearn.preprocessing import (
 from sklearn.pipeline import Pipeline
 from sklearn.experimental import enable_iterative_imputer
 from sklearn.impute import IterativeImputer
-from src.data_utils import get_feature_lists
 
 
 def remove_prefix(df):
@@ -308,7 +312,7 @@ def transform_export_data_dev(
 
 
 def transform_export_data_full(
-    df,
+    df_path,
     x_cols,
     target_col_name,
     data_path=None,
@@ -354,6 +358,7 @@ def transform_export_data_full(
     UserWarning
         Raised when overwriting existing data or preprocessor files.
     """
+    df = pd.read_parquet(df_path)
     df_sub = df[df["OPERYR"] >= 2014]
     train_years = list(range(2014, 2022))  # 2014-2021
     train_set = df_sub[df_sub["OPERYR"].isin(train_years)]

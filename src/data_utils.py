@@ -1,10 +1,30 @@
 import pandas as pd
-import numpy as np
 from src.config import BASE_PATH
 import joblib
 
 # Although not used, need import here for loading calibrated models
 from src.nn_model import load_nn_clf
+
+
+def export_data(data_to_export, export_path):
+    if export_path.exists():
+        export_path.unlink()
+    export_path.parent.mkdir(exist_ok=True, parents=True)
+
+    file_type = export_path.suffix
+    if file_type == ".parquet":
+        data_to_export.to_parquet(export_path)
+    elif file_type == ".tsv":
+        data_to_export.to_csv(export_path, sep="\t")
+    elif file_type == ".csv":
+        data_to_export.to_csv(export_path)
+    elif file_type == ".xlsx":
+        data_to_export.to_excel(export_path)
+    elif file_type == ".pdf":
+        data_to_export.savefig(export_path, bbox_inches="tight")
+    else:
+        raise ValueError(f"Unrecognized file type: {file_type}")
+    assert export_path.exists()
 
 
 def import_raw_data_dict(import_dir, verbose=False):
@@ -37,7 +57,6 @@ def get_feature_lists(df):
     """
     ## Initialize feature lists w/ exceptions to rules
     binary_cols = []
-    # nominal_cols = ["DIABETES", "SURGINDICD", "ANESTHES", "RACE"]
     nominal_cols = []
     ordinal_cols = ["ASACLAS"]
     numerical_cols = []

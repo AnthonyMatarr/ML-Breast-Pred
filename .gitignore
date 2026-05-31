@@ -2,3 +2,6 @@ data/
 swarm/
 *__pycache__*
 *feat_eng*/
+models/
+old_notebooks/
+results/
