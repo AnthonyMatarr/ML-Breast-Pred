@@ -86,7 +86,7 @@ def clean_08_10(df, include_cpt):
     ## Readmission
     df_w_codes["READ"] = "Unknown_08_10"
     ## Unplanned Readmission
-    df_w_codes["UNPLNREAD"] = "Unknown_08_11"
+    df_w_codes["UNPLNREAD"] = "Unknown_08_10"
     ## Discharge Dest
     df_w_codes["DISCHDEST"] = "Unknown_08_10"
     df_w_codes.reset_index(drop=True, inplace=True)

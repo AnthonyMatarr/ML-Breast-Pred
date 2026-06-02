@@ -1,6 +1,5 @@
 import warnings
 
-warnings.filterwarnings("ignore", category=ExperimentalWarning)
 import argparse
 from datetime import datetime
 
@@ -22,6 +21,8 @@ from pathlib import Path
 
 import optuna
 from optuna.exceptions import ExperimentalWarning
+
+warnings.filterwarnings("ignore", category=ExperimentalWarning)
 
 #### GLOBALS ####
 EARLY_STOP_ROUNDS = 50
