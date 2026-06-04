@@ -1,10 +1,7 @@
 import warnings
-
 import argparse
-from datetime import datetime
 
-
-from src.data_utils import get_data, export_data
+from src.data_utils import get_data, export_data, log
 from src.eval import get_logspace_thresholds, get_bin_metrics, plot_risk_bar_dot
 
 from sklearn.metrics import average_precision_score, roc_auc_score
@@ -115,11 +112,6 @@ def get_feat_groups(is_cancer):
     if is_cancer:
         feat_groups["SURGINDICD"] = ["SURGINDICD"]
     return feat_groups
-
-
-def log(msg):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {msg}")
 
 
 ###### tune_train_model() helpers ######

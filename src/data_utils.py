@@ -1,12 +1,13 @@
 import pandas as pd
 from src.config import BASE_PATH
 import joblib
+from datetime import datetime
 
 # Although not used, need import here for loading calibrated models
 from src.nn_model import load_nn_clf
 
 
-def export_data(data_to_export, export_path):
+def export_data(data_to_export, export_path, **kwargs):
     if export_path.exists():
         export_path.unlink()
     export_path.parent.mkdir(exist_ok=True, parents=True)
@@ -22,9 +23,18 @@ def export_data(data_to_export, export_path):
         data_to_export.to_excel(export_path)
     elif file_type == ".pdf":
         data_to_export.savefig(export_path, bbox_inches="tight")
+    elif file_type == ".npz":
+        import numpy as np
+
+        np.savez(export_path, *kwargs)
     else:
         raise ValueError(f"Unrecognized file type: {file_type}")
     assert export_path.exists()
+
+
+def log(msg):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {msg}")
 
 
 def import_raw_data_dict(import_dir, verbose=False):

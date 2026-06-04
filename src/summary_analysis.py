@@ -3,7 +3,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from src.feat_eng import log
+from src.data_utils import log
 
 from scipy.stats import chi2_contingency, fisher_exact, mannwhitneyu
 from scipy.stats.contingency import odds_ratio

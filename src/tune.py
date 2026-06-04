@@ -7,7 +7,7 @@ from datetime import datetime
 import json
 
 
-from src.data_utils import get_data
+from src.data_utils import get_data, log
 from src.nn_model import TorchNNClassifier
 from src.eval import (
     get_logspace_thresholds,
@@ -69,11 +69,6 @@ def extract_metrics_from_log(log_path, model_name):
         "train_ap": data_second["train_ap"],
         "val_ap": data_second["val_ap"],
     }
-
-
-def log(msg):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {msg}")
 
 
 def lightgbm_model_builder(trial, seed):

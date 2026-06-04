@@ -33,15 +33,13 @@ def run_feat_red_confirm_swarm(
         subprocess.run(swarm_cmd, shell=True)
 
 
-def run_tune_swarm(
-    model_list, log_base_dir, cmd_dir, n_threads, config_dict, partition
-):
+def run_tune_eval_swarm(model_list, log_base_dir, cmd_dir, n_threads, config_dict):
     for model in model_list:
         config = config_dict[model]
         swarm_path = cmd_dir / f"{model}.swarm"
         log_dir = log_base_dir / model
         log_dir.mkdir(exist_ok=True, parents=True)
-        swarm_cmd = f"swarm --time={config['swarm_time']} -g {config['gb']} -t {int(1.5*n_threads)} --logdir={log_dir}  --job-name=tune_{model} --partition={partition} -b 1 {swarm_path}"
+        swarm_cmd = f"swarm --time={config['swarm_time']} -g {config['gb']} -t {int(1.5*n_threads)} --logdir={log_dir}  --job-name=tune_{model} --partition={config['partition']} -b 1 {swarm_path}"
         subprocess.run(swarm_cmd, shell=True)
 
 

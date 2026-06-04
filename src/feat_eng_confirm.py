@@ -4,13 +4,12 @@ from pathlib import Path
 import pandas as pd
 from src.feat_eng import (
     get_feat_groups,
-    log,
     tune_train_model,
     calibrate_model,
     eval_model,
     export_data,
 )
-from src.data_utils import get_data
+from src.data_utils import get_data, log
 from src.config import BASE_PATH
 from optuna.exceptions import ExperimentalWarning
 
