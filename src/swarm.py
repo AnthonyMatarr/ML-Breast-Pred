@@ -53,3 +53,13 @@ def run_tune_explore_swarm(
         log_dir.mkdir(exist_ok=True, parents=True)
         swarm_cmd = f"swarm --time={config['swarm_time']} -g {config['gb']} -t {int(1.5*n_threads)} --logdir={log_dir}  --job-name=expl_tune_{cancer_recon_str} --partition={partition} -b 1 {swarm_path}"
         subprocess.run(swarm_cmd, shell=True)
+
+
+def run_swarms_shap(swarm_log_dir, cmd_dir, model_list, config_dict):
+    for model_name in model_list:
+        config = config_dict[model_name]
+        swarm_path = cmd_dir / f"{model_name}.swarm"
+        log_dir = swarm_log_dir / model_name
+        log_dir.mkdir(parents=True, exist_ok=True)
+        swarm_cmd = f"swarm --time={config['swarm_time']} -g {config['gb']} -t 6 --logdir={log_dir}  --job-name=SHAP_{model_name.upper()} --partition={config['partition']} -b {config['batch_size']} {swarm_path}"
+        subprocess.run(swarm_cmd, shell=True)
