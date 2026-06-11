@@ -551,6 +551,7 @@ def eval_outcome_model(
                 "F1-score": set_dict["f1"],
                 "Accuracy": set_dict["accuracy"],
                 "Precision": set_dict["precision"],
+                "Recall": set_dict["recall"],
                 "ICI": set_dict["ici"],
                 "Threshold": binary_threshold,
             }
