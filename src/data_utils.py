@@ -3,9 +3,6 @@ from src.config import BASE_PATH
 import joblib
 from datetime import datetime
 
-# Although not used, need import here for loading calibrated models
-from src.nn_model import load_nn_clf
-
 
 def export_data(data_to_export, export_path, **kwargs):
     if export_path.exists():
@@ -115,6 +112,9 @@ def get_models(model_prefix_list, outcome, file_dir=BASE_PATH / "models"):
     """
     For a given outcome, get all models that predict that outcome
     """
+    # Needed for joblib to deserialize calibrated sklearn wrappers around TorchNNClassifier
+    from src.nn_model import load_nn_clf
+
     model_dict = {}
     for model_name in model_prefix_list:
         model = joblib.load(file_dir / outcome / f"{model_name}.joblib")
