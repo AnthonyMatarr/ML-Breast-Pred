@@ -1,4 +1,4 @@
-from src.feat_importance import get_ohe_cols, combine_encoded
+from src.feat_imp import get_ohe_cols, combine_encoded
 import copy
 import numpy as np
 import pandas as pd
@@ -8,12 +8,8 @@ import streamlit as st
 def split_catgeorical(feature_name, model_value):
     try:
         code_str_split = str(model_value).split("_")
-        if feature_name == "ETHNICITY_HISPANIC":
-            colname = "_".join(code_str_split[:2])
-            code_val = code_str_split[2]
-        else:
-            colname = code_str_split[0]
-            code_val = code_str_split[1]
+        colname = code_str_split[0]
+        code_val = code_str_split[1]
         try:
             assert colname == feature_name
         except AssertionError:
@@ -56,37 +52,6 @@ def inv_diab(feature_name, code_str):
         raise ValueError(f"Invalid diabetes code: {code_str}")
 
 
-# --- inverse of transform_yes_no_unknown ---
-def inv_yes_no_unknown(feature_name, code_str):
-    code_str = split_catgeorical(feature_name, code_str)
-    if code_str in ["Yes", "No"]:
-        return code_str
-    # Unknown(...) already looks like "Unknown" to the user
-    if code_str.startswith("Unknown"):
-        return "Unknown"
-    raise ValueError(f"Invalid yes/no/unknown code for {feature_name}: {code_str}")
-
-
-# --- inverse of transform_icd ---
-def inv_icd(feature_name, code_str):
-    code_str = split_catgeorical(feature_name, code_str)
-    m = {
-        "MALIGNANTICD": "Breast Tumor (Malignant)",
-        "INFLOTHERICD": "Inflammatory Breast Condition",
-        "CARCINOMAICD": "Breast Tumor (Carcinoma in situ)",
-        "BENIGNICD": "Breast Lesion (Benign)",
-        "PROPHYLACTICICD": "Prophylaxis",
-        "ABSICD": "Previous Mastectomy",
-        "ABBREASTICD": "Abnormal Breast Imaging",
-        "CONGICD": "Congenital Breast Disorder",
-        "METASTATICICD": "Breast Tumor (Metastatic)",
-    }
-    try:
-        return m[code_str]
-    except KeyError:
-        raise ValueError(f"Invalid ICD code: {code_str}")
-
-
 # --- inverse of transform_anes ---
 def inv_anes(feature_name, code_str):
     code_str = split_catgeorical(feature_name, code_str)
@@ -105,8 +70,8 @@ def inv_anes(feature_name, code_str):
 def inv_spec(feature_name, code_str):
     code_str = split_catgeorical(feature_name, code_str)
     m = {
-        "General Surgery": "General Surgery",
-        "Plastics": "Plastic Surgery",
+        "General": "General Surgery",
+        "Plastic": "Plastic Surgery",
         "otherUnknown": "Other/unknown",
     }
     try:
@@ -159,26 +124,6 @@ def inv_ord_cpt(code_str):
         raise ValueError(f"Invalid ordinal CPT code: {code_str}")
 
 
-# --- inverse of transform_sex ---
-def inv_sex(code):
-    code = int(code)
-    if code == 0:
-        return "Male"
-    if code == 1:
-        return "Female"
-    raise ValueError(f"Invalid sex code: {code}")
-
-
-# --- inverse of transform_hispanic ---
-def inv_hispanic(code):
-    code = int(code)
-    if code == 1:
-        return "Hispanic"
-    if code == 0:
-        return "Not Hispanic/Unknown"
-    raise ValueError(f"Invalid ETHNICITY_HISPANIC code: {code}")
-
-
 # --- inverse of transform_casetype ---
 def inv_casetype(code):
     code = int(code)
@@ -229,15 +174,7 @@ def decode_cat_for_display(feature_name, model_value):
     """
     # normalize once
     code_val = str(model_value)
-    # ICD indication
-    if feature_name == "SURGINDICD":
-        return inv_icd(feature_name, code_val)
-
     # demographics
-    if feature_name == "SEX":
-        return inv_sex(float(code_val))
-    if feature_name == "ETHNICITY_HISPANIC":
-        return inv_hispanic(float(code_val))
     if feature_name == "RACE":
         return inv_race(feature_name, code_val)
     if feature_name == "DIABETES":
@@ -245,24 +182,14 @@ def decode_cat_for_display(feature_name, model_value):
 
     # simple yes/no binaries
     if feature_name in [
+        "SMOKE",
         "HXCOPD",
         "HXCHF",
-        "ASCITES",
-        "BLEEDDIS",
-        "TRANSFUS",
-        "DIALYSIS",
         "HYPERMED",
-        "VENTILAT",
-        "SMOKE",
+        "BLEEDDIS",
         "DISCANCR",
-        "STEROID",
-        "NPWTCPT",
     ]:
         return inv_yes_no(float(code_val))
-
-    # yes/no/unknown columns
-    if feature_name in ["RENAFAIL", "DYSPNEA", "WNDINF", "WTLOSS"]:
-        return inv_yes_no_unknown(feature_name, code_val)
 
     # ASA class
     if feature_name == "ASACLAS":
@@ -270,6 +197,8 @@ def decode_cat_for_display(feature_name, model_value):
 
     # intra-op categorical
     if feature_name == "SURGSPEC":
+        print(feature_name)
+        print(code_val)
         return inv_spec(feature_name, code_val)
     if feature_name == "ANESTHES":
         return inv_anes(feature_name, code_val)
@@ -280,28 +209,22 @@ def decode_cat_for_display(feature_name, model_value):
 
     # ordinal CPT-style codes
     if feature_name in [
-        "SNLBCPT",
-        "ALNDCPT",
+        # Resection
         "PARTIALCPT",
         "SUBSIMPLECPT",
-        "RADICALCPT",
         "MODIFIEDRADICALCPT",
+        # Axillary
+        "SNLBCPT",
+        "ALNDCPT",
+        # Implant
         "IMMEDIATECPT",
-        "DELAYEDCPT",
         "TEINSERTIONCPT",
-        "TEEXPANDERCPT",
+        # Autologous
         "FREECPT",
-        "LATCPT",
         "SINTRAMCPT",
-        "SINTRAMSUPERCPT",
-        "BITRAMCPT",
-        "AUGPROSIMPCPT",
-        "MASTOCPT",
+        # Adjunct
         "BREASTREDCPT",
-        "FATGRAFTCPT",
-        "REVRECBREASTCPT",
         "ADJTISTRANSCPT",
-        "OTHERRECONTECHCPT",
     ]:
         return inv_ord_cpt(code_val)
 
@@ -315,7 +238,7 @@ def feature_value_label(name, disp_value, num_series):
     # numeric features: as before using num_original_series
     if name in num_series.index:
         val = num_series[name]
-        if name in ["AGE", "OPERYR"]:
+        if name == "AGE":
             return f"{val:.0f}"
         elif name == "BMI":
             return f"{val:.1f}"
@@ -330,67 +253,43 @@ def pretty_feature_name(name):
     feature_label_map = {
         # Demographics / baseline
         "AGE": "Age (years)",
-        "SEX": "Sex",
         "RACE": "Race",
-        "ETHNICITY_HISPANIC": "Ethnicity",
         "BMI": "BMI (kg/m²)",
-        "OPERYR": "Surgery Year",
-        # Indication / diagnosis
-        "SURGINDICD": "Diagnosis",
+        # Comorbidities / status
+        "SMOKE": "Current smoker",
+        "DIABETES": "Diabetes status",
+        "HXCOPD": "COPD",
+        "HXCHF": "CHF",
+        "HYPERMED": "Hypertension",
+        "BLEEDDIS": "Bleeding disorder",
+        "DISCANCR": "Disseminated cancer",
+        "ASACLAS": "ASA class",
         # Preoperative labs
         "PRALBUM": "Albumin (g/dL)",
         "PRWBC": "WBC (×10³/µL)",
         "PRHCT": "Hematocrit (%)",
         "PRPLATE": "Platelet (×10³/µL)",
-        # Comorbidities / status
-        "DIABETES": "Diabetes status",
-        "HXCOPD": "COPD",
-        "HXCHF": "CHF",
-        "ASCITES": "Ascites",
-        "BLEEDDIS": "Bleeding disorder",
-        "TRANSFUS": "Preop transfusion",
-        "DIALYSIS": "Dialysis",
-        "HYPERMED": "Hypertension",
-        "VENTILAT": "Ventilator dependence",
-        "SMOKE": "Current smoker",
-        "DISCANCR": "Disseminated cancer",
-        "RENAFAIL": "Renal failure",
-        "STEROID": "Chronic steroid use",
-        "ASACLAS": "ASA class",
-        "DYSPNEA": "Dyspnea",
-        "WNDINF": "Wound infection",
-        "WTLOSS": "Significant weight loss",
         # Intraoperative / setting
-        "INOUT": "Setting",
-        "OPTIME": "Operative time (min)",
         "URGENCY": "Case type",
         "ANESTHES": "Anesthesia",
         "SURGSPEC": "Specialty",
-        # Mastectomy CPT groups
-        "SNLBCPT": "Sentinel lymph node biopsy",
-        "ALNDCPT": "Axillary lymph node dissection",
+        "INOUT": "Setting",
+        # Resection
         "PARTIALCPT": "Partial mastectomy",
         "SUBSIMPLECPT": "Simple mastectomy",
-        "RADICALCPT": "Radical mastectomy",
         "MODIFIEDRADICALCPT": "Modified radical mastectomy",
-        # Reconstruction CPT groups
+        # Axillary
+        "SNLBCPT": "Sentinel lymph node biopsy",
+        "ALNDCPT": "Axillary lymph node dissection",
+        # Implant
         "IMMEDIATECPT": "Immediate Implant",
-        "DELAYEDCPT": "Delayed Implant",
         "TEINSERTIONCPT": "Tissue expander insertion",
-        "TEEXPANDERCPT": "Tissue expander exchange",
+        # Autologous
         "FREECPT": "Free flap",
-        "LATCPT": "Latissimus dorsi flap",
         "SINTRAMCPT": "Single-pedicle TRAM flap",
-        "SINTRAMSUPERCPT": "Supercharged single TRAM",
-        "BITRAMCPT": "Bipedicled TRAM flap",
-        "AUGPROSIMPCPT": "Implant augmentation",
-        "MASTOCPT": "Mastopexy",
+        # Adjunct
         "BREASTREDCPT": "Breast reduction",
-        "FATGRAFTCPT": "Fat grafting",
-        "REVRECBREASTCPT": "Revision Procedure",
         "ADJTISTRANSCPT": "Adjacent tissue transfer",
-        "NPWTCPT": "Negative-pressure wound therapy",
-        "OTHERRECONTECHCPT": "Other reconstruction technique",
     }
 
     return feature_label_map.get(name, name)
@@ -422,7 +321,7 @@ def compute_shap_data(
 ):
     """
     Compute SHAP values once and cache them.
-    processed_data_hash and outcome_nameis used to invalidate cache when input changes.
+    processed_data_hash and outcome_name are used soley to invalidate cache when input changes.
 
     All parameters prefixed with _ to tell Streamlit not to hash them directly.
     """
@@ -439,15 +338,9 @@ def compute_shap_data(
     scaler = num_pipe.named_steps["scaler"]
 
     # numeric outputs after BMI step (hard-coded order)
+    feature_names = _pipeline.get_feature_names_out()
     num_out_cols = [
-        "AGE",
-        "PRALBUM",
-        "PRWBC",
-        "PRHCT",
-        "PRPLATE",
-        "OPTIME",
-        "OPERYR",
-        "BMI",
+        n.replace("num__", "") for n in feature_names if n.startswith("num__")
     ]
     # Inverse transform numeric features
     feat_names = list(shap_combined.feature_names)

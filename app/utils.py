@@ -1,11 +1,13 @@
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import streamlit as st
 
 BASE_PATH = Path(__file__).parent.parent
-from app.config import CHOSEN_MODEL_DICT
+from app.app_config import CHOSEN_MODEL_DICT
 
 
+@st.cache_data
 def load_population_probs(outcome_name):
     df = pd.read_parquet(
         BASE_PATH
@@ -16,6 +18,7 @@ def load_population_probs(outcome_name):
     return df["prob"].values, df["label"].values
 
 
+@st.cache_data
 def load_bin_thresholds(outcome_name):
     """
     Loads bin thresholds for a given outcome/model from .npz files.
@@ -33,7 +36,6 @@ def load_bin_thresholds(outcome_name):
 
 def bin_occur_rates(outcome, thresholds):
     probs, true = load_population_probs(outcome)
-    # thresholds = load_bin_thresholds(outcome)
     n_bins = len(thresholds) + 1
     bin_indices = np.digitize(probs, thresholds, right=False)  # type: ignore
     event_rates = []
@@ -70,15 +72,6 @@ def transform_yes_no(input_val):
         return 0
     else:
         raise ValueError(f"Invalid input: {input_val}. Expected 'Yes' or 'No'")
-
-
-def transform_sex(input_val):
-    if input_val == "Male":
-        return 0
-    elif input_val == "Female":
-        return 1
-    else:
-        raise ValueError(f"Invalid input: {input_val}. Expected 'Male' or 'Female'")
 
 
 def transform_race(input_val):
@@ -132,33 +125,9 @@ def transform_asa(input_val):
             raise ValueError(f"Invalid input: {input_val}")
 
 
-def transform_icd(input_val):
-    match input_val:
-        case "Breast Tumor (Malignant)":
-            return "MALIGNANTICD"
-        case "Inflammatory Breast Condition":
-            return "INFLOTHERICD"
-        case "Breast Tumor (Carcinoma in situ)":
-            return "CARCINOMAICD"
-        case "Breast Lesion (Benign)":
-            return "BENIGNICD"
-        case "Prophylaxis":
-            return "PROPHYLACTICICD"
-        case "Previous Mastectomy":
-            return "ABSICD"
-        case "Abnormal Breast Imaging":
-            return "ABBREASTICD"
-        case "Congenital Breast Disorder":
-            return "CONGICD"
-        case "Breast Tumor (Metastatic)":
-            return "METASTATICICD"
-        case _:
-            raise ValueError(f"Invalid input: {input_val}")
-
-
 def transform_spec(input_val):
     if input_val in ["General Surgery", "Plastic Surgery"]:
-        return input_val
+        return input_val.replace(" Surgery", "")
     elif input_val == "Other/unknown":
         return "otherUnknown"
     else:
@@ -208,32 +177,4 @@ def transform_ord_cpt(input_val):
     else:
         raise ValueError(
             f"Invalid input: {input_val}. Expected one of ['None', 'Unilateral', 'Bilateral']."
-        )
-
-
-def transform_hispanic(input_val):
-    if input_val == "Hispanic":
-        return 1
-    elif input_val == "Not Hispanic/Unknown":
-        return 0
-    else:
-        raise ValueError(f"Unrecognized entry for hispanic {input_val}")
-
-
-def transform_yes_no_unknown(input_val, col_name):
-    if input_val in ["Yes", "No"]:
-        return input_val
-    elif input_val == "Unknown":
-        if col_name == "RENAFAIL":
-            yr = "21"
-        elif col_name in ["DYSPNEA", "WNDINF", "WTLOSS"]:
-            yr = "21-24"
-        else:
-            raise ValueError(
-                f"Unrecognized column name for transforming yes/no/unknown: {col_name}"
-            )
-        return f"Unknown({yr})"
-    else:
-        raise ValueError(
-            f"Unrecognized entry for transforming yes/no/unknown: {input_val}"
         )

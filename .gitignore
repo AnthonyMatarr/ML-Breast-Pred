@@ -2,6 +2,11 @@ data/
 swarm/
 *__pycache__*
 *feat_eng*/
-models/
+models/trained
+models/calibrated
 old_notebooks/
 results/
+results_old/
+data_old/
+models_old/
+*DS_Store*
