@@ -26,7 +26,7 @@ def export_data(data_to_export, export_path, **kwargs):
     elif file_type == ".npz":
         import numpy as np
 
-        np.savez(export_path, *kwargs)
+        np.savez(export_path, **kwargs)
     else:
         raise ValueError(f"Unrecognized file type: {file_type}")
     assert export_path.exists()
