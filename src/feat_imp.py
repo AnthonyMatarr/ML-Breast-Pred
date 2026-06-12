@@ -1,5 +1,4 @@
 from src.config import SEED
-from src.nn_model import load_nn_clf
 from src.data_utils import log
 
 import argparse
@@ -19,6 +18,8 @@ def import_data(import_path, in_dim=None):
     if suffix == ".joblib":
         imp_data = joblib.load(import_path)
     elif suffix == ".pt":
+        from src.nn_model import load_nn_clf
+
         imp_data = load_nn_clf(data_path=import_path, in_dim=in_dim, device="cpu")
     elif suffix == ".parquet":
         imp_data = pd.read_parquet(import_path)
