@@ -10,3 +10,5 @@ results_old/
 data_old/
 models_old/
 *DS_Store*
+notebooks/old
+src/old

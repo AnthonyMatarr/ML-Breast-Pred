@@ -20,6 +20,9 @@ warnings.filterwarnings("ignore", category=ExperimentalWarning)
 ##########################################################################################
 ##########################################################################################
 def is_monotonic(df):
+    """
+    Check if risk-bin lift increases strictly across Low < Moderate < High
+    """
     low_val = float(df.loc["Low", "lift"])
     med_val = float(df.loc["Moderate", "lift"])
     high_val = float(df.loc["High", "lift"])
@@ -27,16 +30,29 @@ def is_monotonic(df):
 
 
 def get_max_auprc(df):
+    """
+    Return max test AUPRC lift across reduction iterations
+    """
     lift_list = df["test_ap (lift)"].apply(lambda r: float(r.split(" ")[1].strip("()")))
     return max(lift_list)
 
 
 def get_max_auroc(df):
+    """
+    Return max test AUROC across reduction iterations
+    """
     auroc_list = df["test_auroc"].astype(float)
     return max(auroc_list)
 
 
 def get_best_lift_bin(bin_dir, num_bins):
+    """
+    Find the best High-bin lift among iterations with monotonic risk bins.
+
+    Scans each iteration's bin report, ignoring non-monotonic ones, and returns
+    the largest High-bin lift observed.
+    """
+
     best_lift = 0
     for iter_dir in bin_dir.iterdir():
         bin_file = pd.read_csv(
@@ -44,7 +60,7 @@ def get_best_lift_bin(bin_dir, num_bins):
         )
         if not is_monotonic(bin_file):
             continue
-        high_lift = float(bin_file.loc["High", "lift"])
+        high_lift = float(bin_file.loc["High", "lift"]) # type: ignore
         if high_lift > best_lift:
             best_lift = high_lift
     return best_lift
@@ -59,6 +75,14 @@ def is_viable(
     bin_df,
     threshold_perc,
 ):
+    """
+    Decide whether a reduction iteration meets all retention criteria.
+
+    An iteration is viable if its risk bins increase monotonically and its
+    AUPRC, AUROC, and High-bin lift are each within ``threshold_perc`` of the
+    best observed values.
+    """
+
     ## Get current values
     reduc_num = int(iter_val.split("_")[1])
     cur_row = metric_df[metric_df["reduction"] == reduc_num]
@@ -76,6 +100,10 @@ def is_viable(
 
 
 def get_rank_df(perm_df, all_feats, outcome):
+    """
+    Build a normalized feature-rank table for one outcome.
+    """
+
     n_feats = len(perm_df)
     rank_list = [round((n_feats - i + 1) / n_feats, 3) for i in range(1, n_feats + 1)]
     rank_col_name = f"Rank_{outcome}"

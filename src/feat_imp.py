@@ -201,6 +201,15 @@ def get_raw_shap(
     explanation_vals,
     seed=SEED,
 ):
+    """
+    Compute raw SHAP values for a model using an explainer matched to its type.
+
+    Selects the explainer by model_name:
+        TreeExplainer for lgbm/xgb
+        LinearExplainer for lr
+        batched KernelExplainer for nn/stack
+    """
+
     if model_name in ["lgbm", "xgb"]:
         explainer = shap.TreeExplainer(
             model=model,
@@ -387,17 +396,6 @@ def generate_MAV(shap_vals, feat_order, result_path):
 def get_stratified_background(X, y, n_background, random_state=SEED):
     """
     Returns a stratified subsample of X with the same event rate as the full dataset.
-
-    Parameters
-    ----------
-    X : pd.DataFrame
-        Feature data to subsample from
-    y : pd.Series or np.ndarray
-        Labels used for stratification
-    n_background : int
-        Number of background samples to return
-    random_state : int
-        Random seed for reproducibility
     """
     frac = n_background / len(X)
     _, X_background, _, _ = train_test_split(

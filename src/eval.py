@@ -17,6 +17,7 @@ BIN_NAME_DICT = {
     4: ["Very Low", "Low", "Moderate", "High"],
 }
 
+# Used for risk bin plot
 Y_MAX_DICT = {
     "SERIOUS": 27.5,
     "ANY": 31.0,
@@ -48,6 +49,9 @@ def get_logspace_thresholds(y_proba, n_bins, lower=1e-5, upper=None):
 
 
 def get_threshold_str(bin_idx, thresholds, n_bins):
+    """
+    Formats bin threshold string
+    """
     if bin_idx == 0:
         threshold_str = f"[0%, {thresholds[0]:.2%})"
     elif bin_idx == n_bins - 1:
@@ -58,6 +62,27 @@ def get_threshold_str(bin_idx, thresholds, n_bins):
 
 
 def get_event_rate(n, in_bin_labels, in_bin_probs, n_bootstraps, seed):
+    """
+    Compute the observed event rate for a single risk bin with a bootstrap CI
+
+    Falls back to the plain mean (and NaN CI) when the bin is empty, has a
+    single class, or the bootstrap fails.
+
+    Parameters
+    ----------
+    n : int
+        Number of patients allocated to the bin.
+    in_bin_labels : np.ndarray
+        True binary labels for patients in the bin.
+    in_bin_probs : np.ndarray
+        Predicted probabilities for patients in the bin (passed to
+        ``Bootstrapping`` but unused by the ``event_rate`` metric).
+    n_bootstraps : int
+        Number of bootstrap iterations.
+    seed : int
+        Random seed for reproducibility.
+    """
+
     n_unique_classes = len(np.unique(in_bin_labels))
     if n > 0 and n_unique_classes > 1:
         try:
@@ -85,6 +110,30 @@ def get_event_rate(n, in_bin_labels, in_bin_probs, n_bootstraps, seed):
 
 
 def get_bin_metrics(y_true, y_proba, thresholds, n_bootstraps, n_bins, seed):
+    """
+    Compute per-bin risk-stratification metrics for a set of predictions.
+
+    Digitizes predicted probabilities into ``n_bins`` using ``thresholds``, then
+    for each bin computes allocation counts, positive counts, bootstrapped event
+    rate, lift over the cohort base rate, mean prediction, and the bin's
+    threshold range.
+
+    Parameters
+    ----------
+    y_true : np.ndarray
+        True binary labels
+    y_proba : np.ndarray
+        Predicted probabilities
+    thresholds : array-like
+        Interior bin edges (length of n_bins - 1)
+    n_bootstraps : int
+        Bootstrap iterations for event-rate CIs
+    n_bins : int
+        Number of risk bins
+    seed : int
+        Random seed for reproducibility
+    """
+
     bin_dict = {}
     bin_names = BIN_NAME_DICT[n_bins]
     thresholds = np.asarray(thresholds, dtype=float).flatten()
@@ -145,7 +194,8 @@ def get_bin_metrics(y_true, y_proba, thresholds, n_bootstraps, n_bins, seed):
 
 def plot_risk_bar_dot(bin_report_dict, n_bins, title, y_max=1.0):
     """
-    Create risk stratification plot with bar graph showing observed event rates and overlaid mean predictions per bin.
+    Create risk stratification plot with bar graph showing observed event
+    rates and overlaid mean predictions per bin.
     """
     ## Label bins w/ thresholds
     event_rates = []
@@ -220,6 +270,10 @@ def get_roc_stats(y_true, y_proba, n_bootstraps=5000, seed=SEED, show_progress=F
 
 
 def get_pr_stats(y_true, y_proba, n_bootstraps=5000, seed=SEED, show_progress=False):
+    """
+    Compute the precision-recall curve, bootstrapped AUPRC, and AUPRC lift.
+    """
+
     precision, recall, _ = precision_recall_curve(y_true, y_proba)
 
     ap, lower_CI, upper_CI = Bootstrapping(
@@ -244,6 +298,23 @@ def get_pr_stats(y_true, y_proba, n_bootstraps=5000, seed=SEED, show_progress=Fa
 
 
 def plot_PRC(recall, precision, ap_string, set_type, event_rate, model_name):
+    """
+    Plot a single precision-recall curve with a base-rate baseline.
+
+    Parameters
+    ----------
+    recall, precision : np.ndarray
+        Curve coordinates.
+    ap_string : str
+        Formatted AUPRC string for the legend.
+    set_type : str
+        Cohort label ("train"/"val"/"test"), shown in title and legend.
+    event_rate : float
+        Base positive rate, drawn as the random-classifier baseline.
+    model_name : str
+        Model label for the title.
+    """
+
     fig, ax = plt.subplots(figsize=(12, 8))
     # Get baseline
     ax.hlines(
@@ -260,8 +331,8 @@ def plot_PRC(recall, precision, ap_string, set_type, event_rate, model_name):
         lw=4,
         label=f"{set_type.capitalize()} AUPRC = {ap_string}",
     )
-    ax.set_xlim([0.0, 1.0])
-    ax.set_ylim([0.0, 1.0])
+    ax.set_xlim([0.0, 1.0]) # type: ignore
+    ax.set_ylim([0.0, 1.0]) # type: ignore
     ## Add meta
     ax.set_title(
         f"{model_name} {set_type} PR Curve",
@@ -286,8 +357,8 @@ def plot_ROC(data_dict, model_name):
         tpr = set_dict["roc_stats"]["tpr"]
         ax.plot(fpr, tpr, lw=4, label=f"{set_type} AUROC = {set_dict['auc_string']}")
 
-    ax.set_xlim([0.0, 1.0])
-    ax.set_ylim([0.0, 1.05])
+    ax.set_xlim([0.0, 1.0]) # type: ignore
+    ax.set_ylim([0.0, 1.05]) # type: ignore
     ax.set_xlabel("False Positive Rate", fontsize=21, fontweight=550)
     ax.set_ylabel("True Positive Rate", fontsize=21, fontweight=550)
     ax.tick_params(axis="both", which="major", labelsize=15)
@@ -378,6 +449,42 @@ def eval_outcome_model(
     metrics_strs,
     seed,
 ):
+    """
+    Run the full evaluation pipeline for one (outcome, model) pair and export results.
+
+    Loads the trained model and its data splits, then computes and writes:
+    test-set predictions, risk-bin thresholds/tables/plots, ROC and PR curves,
+    and bootstrapped discrimination metrics
+
+    Parameters
+    ----------
+    outcome : str
+        Outcome/target name
+    model_name : str
+        Name of the model
+    model_imp_dir: pathlib.Path
+        Input model dir
+    data_imp_dir: pathlib.Path
+        Input data dir
+    results_dir : pathlib.Path
+        Output results root.
+    n_bootstraps : int
+        Bootstrap iterations for all CI estimates.
+    n_bins : int
+        Number of risk bins (3 or 4).
+    show_progress : bool
+        Whether to show bootstrap progress bars.
+    metrics_strs : list[str]
+        Discrimination metrics to compute (e.g. "f1", "brier", "ici").
+    seed : int
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    None
+        All outputs are written to disk as a side effect.
+    """
+
     log(f"Running eval for outcome: {outcome}; model: {model_name}")
     ###############################################################################
     ############### 1) SET UP BASE DATA + WHERE RESULTS ARE TRACKED ###############

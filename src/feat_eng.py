@@ -27,6 +27,21 @@ LGBM_MAX_ROUNDS = 1000
 
 
 def get_feat_groups(is_cancer):
+    """
+    Return the feature-grouping map used for grouped permutation importance.
+
+    Maps each conceptual feature name to its underlying column(s) — singletons
+    for continuous/binary features and the full set of one-hot columns for
+    nominal categoricals. Permutation importance shuffles each group's columns together
+    so related encodings stay aligned.
+
+    Parameters
+    ----------
+    is_cancer : bool
+        If True, ``SURGINDICD`` is treated as a single binary column instead of
+        its one-hot-encoded expansion.
+    """
+
     feat_groups = {
         # ── Continuous / binary singletons ───────────────────────────────────────
         "AGE": ["AGE"],
@@ -116,11 +131,17 @@ def get_feat_groups(is_cancer):
 
 ###### tune_train_model() helpers ######
 def _make_cv_splits(y, n_folds, seed):
+    """
+    Build deterministic stratified k-fold (k=n_folds) train,test index pairs
+    """
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
     return list(skf.split(np.zeros(len(y)), y))
 
 
 def _search_space(trial):
+    """
+    Define Optuna search space for LightGBM hyperparams
+    """
     return {
         "num_leaves": trial.suggest_int("num_leaves", 15, 255),
         "max_depth": trial.suggest_int("max_depth", 3, 12),
@@ -186,7 +207,7 @@ def tune_train_model(
                     lgb.log_evaluation(period=0),
                 ],
             )
-            y_proba = fold_model.predict_proba(X_tst)[:, 1]
+            y_proba = fold_model.predict_proba(X_tst)[:, 1] # type: ignore
             fold_aps.append(float(average_precision_score(y_tst, y_proba)))
             fold_iters.append(int(fold_model.best_iteration_))
             ## Report to pruner
@@ -208,7 +229,7 @@ def tune_train_model(
     study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
 
     best_trial = study.best_trial
-    cv_score = float(best_trial.value)
+    cv_score = float(best_trial.value) # type: ignore
     mean_best_iter = int(best_trial.user_attrs.get("mean_best_iter", LGBM_MAX_ROUNDS))
     best_params = best_trial.params  # tuned only; no fixed constants
     full_params = _build_params(best_params, y_train, seed, n_jobs)
@@ -233,6 +254,14 @@ def tune_train_model(
 
 
 def format_bin_dict(bin_dict):
+    """
+    Format a raw risk-bin metrics dict into display-ready strings.
+
+    Collapses event rate + CIs, total counts, and positive counts into
+    formatted percentage strings, drops the intermediate raw keys, and rounds
+    lift and mean model output.
+    """
+
     for bin_name in bin_dict.keys():
         # event rate
         event_rate_w_cis = bin_dict[bin_name]["event_rate_w_CIs"]
@@ -260,6 +289,14 @@ def format_bin_dict(bin_dict):
 
 
 def eval_model(X_train, y_train, X_val, y_val, X_test, y_test, model, export_dir):
+    """
+    Evaluate a fitted model: risk-bin reports/plots plus AUROC and AUPRC.
+
+    For both 3- and 4-bin schemes, computes bin metrics and exports a plot and
+    table per scheme, then returns aggregate discrimination metrics (AUROC,
+    AUPRC with lift) for the train/val/test splits.
+    """
+
     ## Get preds
     y_proba_train = model.predict_proba(X_train)[:, 1]
     y_proba_val = model.predict_proba(X_val)[:, 1]
@@ -272,13 +309,13 @@ def eval_model(X_train, y_train, X_val, y_val, X_test, y_test, model, export_dir
             y_true=y_test,
             y_proba=y_proba_test,
             thresholds=bin_thresholds,
-            bin_report_dict={},  # empty dict to initialize
+            bin_report_dict={},  # empty dict to initialize # type: ignore
             n_bootstraps=10,  # not too interested in CIs here
             n_bins=n_bins,
         )
         ### Plot bins + export
-        ax = plot_risk_bar_dot(bin_metric_dict, y_max=0.4, n_bins=n_bins)
-        fig = ax.get_figure()
+        ax = plot_risk_bar_dot(bin_metric_dict, title=model, y_max=0.4, n_bins=n_bins)
+        fig = ax.get_figure() # type: ignore
         export_data(
             data_to_export=fig, export_path=export_dir / f"bin_plot_{n_bins}.pdf"
         )
@@ -370,6 +407,9 @@ def get_drop_cols(perm_imp_df, perc_per_iter, feature_dict):
 
 
 def calibrate_model(X, y, n_splits, seed, model, n_cv_jobs):
+    """
+    Wrap a frozen model in cross-validated prob calibration
+    """
     skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
     calibrated_model = CalibratedClassifierCV(
         FrozenEstimator(model), cv=skf, n_jobs=n_cv_jobs
@@ -396,6 +436,47 @@ def run_iter_feat_red(
     n_cv_jobs,
     export_dir,
 ):
+    """
+    Run iterative grouped-permutation feature reduction for one (cohort, outcome) pair
+
+    Each iteration tunes and fits a LightGBM model, calibrates it, evaluates it,
+    computes grouped permutation importance, drops the lowest-importance feature
+    groups, and repeats on the reduced feature set. Per-iteration metrics,
+    permutation tables, and bin reports are exported.
+
+    Parameters
+    ----------
+    outcome : str
+        Target outcome name (used for study naming and logging).
+    cohort : str
+        Cohort label; ``"cancer"`` toggles the binary ``SURGINDICD`` encoding.
+    base_X_train, base_X_val, base_X_test : pd.DataFrame
+        Initial feature matrices before any reduction.
+    y_train, y_val, y_test : array-like
+        Binary labels for each split.
+    n_cv_folds : int
+        Folds for tuning CV and calibration.
+    num_optuna_trials : int
+        Optuna trials per reduction iteration.
+    num_perm_repeats : int
+        Permutation repeats for importance estimation.
+    n_reduction_repeats : int
+        Number of reduction iterations.
+    perc_per_iter : float
+        Fraction of feature groups dropped each iteration.
+    seed : int
+        Random seed for reproducibility.
+    n_cv_jobs : int
+        Parallel jobs for CV/calibration.
+    export_dir : pathlib.Path
+        Root directory for all exported artifacts.
+
+    Returns
+    -------
+    pd.DataFrame
+        One row of metrics per reduction iteration.
+    """
+
     feature_grpups = get_feat_groups(is_cancer=(cohort == "cancer"))
     X_df_train = base_X_train
     X_df_val = base_X_val

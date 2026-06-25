@@ -9,6 +9,30 @@ from src.data_utils import get_feature_lists
 ################################### CLEAN ####################################
 ##############################################################################
 def get_code_cols(df, include_cpt=False):
+    """
+    Return the names of CPT/ICD code columns.
+
+    Identifies columns holding diagnosis (``PODIAG``) or procedure (``CPT``)
+    codes, excluding the curated single-purpose CPT flag columns in ``skip_cols``
+    and the bare ``CPT`` column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        NSQIP df to inspect
+    include_cpt : bool
+        If True:
+            keep generic ``CPT`` code columns (still excluding
+            ``skip_cols``)
+        If False:
+            the skip-list filter is only applied within
+            the ``CPT`` branch.
+
+    Returns
+    -------
+    list[str]
+        Names of the matching code columns.
+    """
     skip_cols = [
         "SNLBCPT",
         "ALNDCPT",
