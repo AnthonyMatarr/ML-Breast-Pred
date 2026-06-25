@@ -1,10 +1,37 @@
 import pandas as pd
-import numpy as np
 from src.config import BASE_PATH
 import joblib
+from datetime import datetime
 
-# Although not used, need import here for loading calibrated models
-from src.nn_model import load_nn_clf
+
+def export_data(data_to_export, export_path, **kwargs):
+    if export_path.exists():
+        export_path.unlink()
+    export_path.parent.mkdir(exist_ok=True, parents=True)
+
+    file_type = export_path.suffix
+    if file_type == ".parquet":
+        data_to_export.to_parquet(export_path)
+    elif file_type == ".tsv":
+        data_to_export.to_csv(export_path, sep="\t")
+    elif file_type == ".csv":
+        data_to_export.to_csv(export_path)
+    elif file_type == ".xlsx":
+        data_to_export.to_excel(export_path)
+    elif file_type == ".pdf":
+        data_to_export.savefig(export_path, bbox_inches="tight")
+    elif file_type == ".npz":
+        import numpy as np
+
+        np.savez(export_path, **kwargs)
+    else:
+        raise ValueError(f"Unrecognized file type: {file_type}")
+    assert export_path.exists()
+
+
+def log(msg):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {msg}")
 
 
 def import_raw_data_dict(import_dir, verbose=False):
@@ -13,14 +40,16 @@ def import_raw_data_dict(import_dir, verbose=False):
         file_name = file.stem
         file_ext = file.suffix
         if file.is_dir():
+            print(f"Got directory: {file_name}, skipping...")
             continue
         if file_ext == ".parquet":
             if verbose:
                 print(f"Working on file: {file_name}...")
             file_import = pd.read_parquet(file)
         else:
-            print(f"\t File extension must be parquet got {file_ext} instead.")
-            print("\t Skipping file...")
+            print(
+                f"\t File extension must be parquet got {file_ext} instead. Skipping..."
+            )
             continue
         data_dict[file_name] = file_import
     assert len(data_dict) == 17
@@ -35,7 +64,6 @@ def get_feature_lists(df):
     """
     ## Initialize feature lists w/ exceptions to rules
     binary_cols = []
-    # nominal_cols = ["DIABETES", "SURGINDICD", "ANESTHES", "RACE"]
     nominal_cols = []
     ordinal_cols = ["ASACLAS"]
     numerical_cols = []
@@ -84,6 +112,9 @@ def get_models(model_prefix_list, outcome, file_dir=BASE_PATH / "models"):
     """
     For a given outcome, get all models that predict that outcome
     """
+    # Needed for joblib to deserialize calibrated sklearn wrappers around TorchNNClassifier
+    from src.nn_model import load_nn_clf
+
     model_dict = {}
     for model_name in model_prefix_list:
         model = joblib.load(file_dir / outcome / f"{model_name}.joblib")

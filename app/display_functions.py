@@ -6,7 +6,7 @@ BASE_PATH = Path(__file__).parent.parent
 sys.path.insert(0, str(BASE_PATH))
 from src.preprocess import remove_prefix
 import app.utils as util
-from app.config import CHOSEN_MODEL_DICT
+from app.app_config import CHOSEN_MODEL_DICT
 from app.shap_utils import (
     pretty_feature_name,
     feature_value_label,
@@ -24,7 +24,7 @@ import hashlib
 
 
 #################### MAIN CLINICAL RESULTS ####################
-# Cache model loading for performance
+# Cache loading for performance
 @st.cache_resource
 def load_model_pipeline_explainer(outcome_name):
     """Load model and preprocessor for a specific outcome."""
@@ -33,11 +33,10 @@ def load_model_pipeline_explainer(outcome_name):
         BASE_PATH
         / "app"
         / "models"
-        / "calibrated"
         / f"{outcome_name}_{CHOSEN_MODEL_DICT[outcome_name]}.joblib"
     )
     model = joblib.load(model_path)
-    ## PIPELINE
+    # ## PIPELINE
     preprocessor = joblib.load(
         BASE_PATH / "app" / "preprocessors" / f"{outcome_name}_pipeline.joblib"
     )
@@ -45,6 +44,10 @@ def load_model_pipeline_explainer(outcome_name):
     explainer = joblib.load(
         BASE_PATH / "app" / "shap_explainers" / f"{outcome_name}.joblib"
     )
+    feat_names = joblib.load(
+        BASE_PATH / "app" / "shap_explainers" / "feature_names.joblib"
+    )
+    explainer.feature_names = feat_names
     return model, preprocessor, explainer
 
 
@@ -53,16 +56,14 @@ def plot_risk_bins(bin_occur_rates, bin_idx, folder_name, color):
     Plot occurrence rates per bin with patient's bin highlighted.
 
     Args:
-        bin_occur_rates: List of occurrence rates [0.001, 0.004, 0.009, 0.018]
+        bin_occur_rates: List of occurrence rates
         bin_idx: Index of patient's assigned bin (0-3)
         display_name: Name of outcome for labeling
     """
     labels = ["Very Low", "Low", "Moderate", "High"]
 
     # Create color list: highlight patient's bin
-    # colors = ["#1f77b4"] * len(labels)  # default blue
     colors = ["#BDBDBD"] * len(labels)  # default grey
-    # colors[bin_idx] = "#ff7f0e"  # highlight in orange
     colors[bin_idx] = color
 
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -133,7 +134,6 @@ def plot_risk_bins(bin_occur_rates, bin_idx, folder_name, color):
         fontsize=11,
         fontweight="bold",
     )
-    # ax.set_title(f"{display_name} Occurrence by Risk Category", fontsize=12)
     ax.set_title(
         "Observed Complication Rate by Risk Category",
         fontsize=13,
@@ -157,15 +157,15 @@ def show_imputed(display_name, folder_name, input_data, num_dict, imp_cols):
         ## Get pipeline steps
         num_pipe = preprocessor.named_transformers_["num"]
         imputer = num_pipe.named_steps["imputer"]
-        ## Get intermediate values
-        X_num_raw = input_data[list(num_dict.keys())]
+        # Get intermediate vals
+        num_cols_full = preprocessor.transformers_[0][2]
+        X_num_raw = input_data[num_cols_full].astype(float)
         X_imputed = imputer.transform(X_num_raw)
         # Build a small df for display
-        num_cols_list = list(num_dict.keys())
         imp_display = {}
         for col in imp_cols:
-            ## Find index amongst num cols
-            col_idx = num_cols_list.index(col)
+            ## Find index in the full numerical columns list
+            col_idx = list(num_cols_full).index(col)
             raw_val = X_imputed[0, col_idx]
             round_rule = num_dict[col]["round rule"]
             imp_display[num_dict[col]["Display Name"]] = round_rule(raw_val)
@@ -182,9 +182,9 @@ def get_dynamic_BMI():
     if "prev_weight_unit" not in st.session_state:
         st.session_state.prev_weight_unit = "lbs"
     if "weight_kg" not in st.session_state:
-        st.session_state.weight_kg = 73.94
+        st.session_state.weight_kg = 73.03
     if "weight_lbs" not in st.session_state:
-        st.session_state.weight_lbs = 164.0
+        st.session_state.weight_lbs = 161.0
 
     # Nested columns: input on left, checkbox on right
     weight_input_col, weight_check_col = st.columns([3, 2])
@@ -239,7 +239,6 @@ def get_dynamic_BMI():
                 weight = st.number_input(
                     "Weight (lbs)",
                     min_value=2.20462,
-                    value=st.session_state.weight_lbs,
                     key="weight_lbs",
                     help="Patient's body weight, recorded preoperatively. Used to calculate BMI.",
                 )
@@ -247,7 +246,6 @@ def get_dynamic_BMI():
                 weight_kg = st.number_input(
                     "Weight (kg)",
                     min_value=1.0,
-                    value=st.session_state.weight_kg,
                     key="weight_kg",
                     help="Patient's body weight, recorded preoperatively. Used to calculate BMI.",
                 )
@@ -258,9 +256,9 @@ def get_dynamic_BMI():
     if "prev_height_unit" not in st.session_state:
         st.session_state.prev_height_unit = "in"
     if "height_m" not in st.session_state:
-        st.session_state.height_m = 1.63
+        st.session_state.height_m = 1.6
     if "height_in" not in st.session_state:
-        st.session_state.height_in = 64.0
+        st.session_state.height_in = 63.0
 
     # Nested columns: input on left, checkbox on right
     height_input_col, height_check_col = st.columns([3, 2])
@@ -315,7 +313,6 @@ def get_dynamic_BMI():
                 height = st.number_input(
                     "Height (in)",
                     min_value=39.3701,
-                    value=st.session_state.height_in,
                     key="height_in",
                     help="Patient's height as recorded preoperatively. Used to calculate BMI.",
                 )
@@ -323,7 +320,6 @@ def get_dynamic_BMI():
                 height_m = st.number_input(
                     "Height (m)",
                     min_value=1.0,
-                    value=st.session_state.height_m,
                     key="height_m",
                     help="Patient's height as recorded preoperatively.",
                 )
@@ -343,11 +339,10 @@ def get_dynamic_BMI():
 def get_input_data():
     st.header("Patient Information")
     col1, col2, col3, col4 = st.columns(4)
-    # ================== Demographics, BMI, Comorbidities ===================
+    # ================== Demographics + BMI ===================
     with col1:
         with st.expander("**Demographics**", expanded=False):
-            # ================== Age ===================
-            # Nested columns: input on left, checkbox on right
+            # ====== AGE ======
             age_input_col, age_check_col = st.columns([3, 2])
             with age_check_col:
                 st.write("")  # Spacer to align with input
@@ -359,10 +354,11 @@ def get_input_data():
                         value=0.0,
                         disabled=True,
                         help="""
-                            Age in years on the date of the principal operative procedure. 
-                            
-                            *Currently marked as unknown - see ***Imputed Values*** after model prediction at 
-                            bottom of page for more information about how this NA value is dealt with*
+                            Age in years on the date of the principal operative procedure.
+
+                            *Currently marked as unknown - see ***Imputed Values*** after model 
+                            prediction at bottom of page for more information about how this NA 
+                            value is dealt with*
                             """,
                     )
                     age = None
@@ -371,22 +367,10 @@ def get_input_data():
                         "Age",
                         min_value=18,
                         max_value=90,
-                        value=56,
+                        value=60,
                         help="Age in years on the date of the principal operative procedure.",
                     )
-            # --> male(0)/female(1)
-            sex = st.selectbox(
-                "Sex",
-                ["Male", "Female"],
-                index=1,
-                help="Patient-reported biological sex at the time of surgery.",
-            )
-            hispanic = st.selectbox(
-                "Ethnicity",
-                ["Hispanic", "Not Hispanic/Unknown"],
-                index=1,
-                help="Self-reported ethnicity, categorized as Hispanic or Not Hispanic/Unknown.",
-            )
+            # ====== Others ======
             race = st.selectbox(
                 "Race",
                 [
@@ -404,6 +388,8 @@ def get_input_data():
         with st.expander("**BMI**", expanded=False):
             height, weight = get_dynamic_BMI()
 
+    # ================== Comorbidities ===================
+    with col2:
         with st.expander("**Comorbidities**", expanded=False):
             smoke = st.selectbox(
                 "Current Smoker (within 1 year)",
@@ -439,12 +425,6 @@ def get_input_data():
                     *NOTE:* Asthma, interstitial fibrosis, or sarcoidosis are excluded.
                     """,
             )
-            dyspnea = st.selectbox(
-                "Dyspnea",
-                ["Yes", "No", "Unknown"],
-                index=1,
-                help="Shortness of breath noted at rest or on exertion within 30 days pre-op, based on clinical documentation.",
-            )
             hxchf = st.selectbox(
                 "Congestive Heart Failure",
                 ["Yes", "No"],
@@ -457,53 +437,11 @@ def get_input_data():
                 index=1,
                 help="Documented diagnosis of hypertension requiring antihypertensive medication within 30 days before surgery.",
             )
-            dialysis = st.selectbox(
-                "Dialysis",
-                ["Yes", "No"],
-                index=1,
-                help="Patient has required peritoneal dialysis, hemodialysis, hemofiltration, hemodiafiltration, or ultrafiltration within 2 weeks prior to surgery. Patients who refuse indicated dialysis are coded 'Yes'.",
-            )
-            renafail = st.selectbox(
-                "Acute Renal Failure",
-                ["Yes", "No", "Unknown"],
-                index=1,
-                help="""
-                    Preoperative renal dysfunction defined as Stage 2/3 AKI:
-
-                    &nbsp;&nbsp;&nbsp;&nbsp;• **Stage 2:** Serum creatinine 2.0–<3.0× baseline within 7 days
-                    
-                    &nbsp;&nbsp;&nbsp;&nbsp;• **Stage 3:** Any of the following:
-                    
-                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;• ≥3.0× baseline within 7 days
-                    
-                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;• Rise of ≥0.3 mg/dL to ≥4.0 mg/dL within 48 hours
-                    
-                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;• ≥1.5× baseline to ≥4.0 mg/dL within 7 days
-                    """,
-            )
             bleed = st.selectbox(
                 "Bleeding Disorder",
                 ["Yes", "No"],
                 index=1,
                 help="History of congenital or acquired bleeding diathesis, anticoagulation therapy, or clinical coagulopathy documented preoperatively.",
-            )
-            wtloss = st.selectbox(
-                "Weight Loss",
-                ["Yes", "No", "Unknown"],
-                index=1,
-                help="Unintentional weight loss >10% of body weight in the 6 months prior to surgery.",
-            )
-            ascites = st.selectbox(
-                "Ascites",
-                ["Yes", "No"],
-                index=1,
-                help="Clinically detectable or radiographically confirmed peritoneal fluid within 30 days pre-op. Must be associated with liver disease or malignancy unless otherwise documented.",
-            )
-            steroid = st.selectbox(
-                "Corticosteroid",
-                ["Yes", "No"],
-                index=1,
-                help="Use of systemic corticosteroids, anti-rejection agents, DMARDs, or other immunosuppressants for ≥10 days within 30 days pre-op, or on an active long-interval regimen extending into the surgical period.",
             )
             discancr = st.selectbox(
                 "Disseminated Cancer",
@@ -522,18 +460,6 @@ def get_input_data():
 
                 **Excludes:** CLL, CML, lymphomas stages I–III, multiple myeloma.
                 """,
-            )
-            vent = st.selectbox(
-                "Preoperative Ventilator Dependence",
-                ["Yes", "No"],
-                index=1,
-                help="The patient requires mechanical ventilation for any duration during the 48 hours immediately preceding surgery. CPAP for sleep apnea is excluded.",
-            )
-            wndinf = st.selectbox(
-                "Wound Infection",
-                ["Yes", "No", "Unknown"],
-                index=1,
-                help="Presence of superficial, deep, or organ/space infection documented preoperatively.",
             )
             asa_class = st.selectbox(
                 "ASA Physical Status Classification",
@@ -556,13 +482,9 @@ def get_input_data():
                     &nbsp;&nbsp;&nbsp;&nbsp;• **ASA V:** Moribund, not expected to survive without operation
                     """,
             )
-            transfus = st.selectbox(
-                "Blood Transfusion (Preoperative)",
-                ["Yes", "No"],
-                index=1,
-                help="Receipt of ≥1 unit of packed RBCs within the 72 hours prior to surgery.",
-            )
-        # ================== Preoperative Laboratory Valuess ===================
+
+    # ================== Blood + Op Characteristics + Resection ===================
+    with col3:
         with st.expander("**Preoperative Laboratory Values**", expanded=False):
             # ====================> Albumin
             alb_input_col, alb_check_col = st.columns([3, 2])
@@ -650,7 +572,7 @@ def get_input_data():
                         "Hematocrit (%)",
                         min_value=0.0,
                         max_value=100.0,
-                        value=39.6,
+                        value=39.5,
                         help="Most recent Hct (%) within 90 days prior to surgery.",
                     )
 
@@ -680,90 +602,11 @@ def get_input_data():
                         "Platelet Count",
                         min_value=0.0,
                         max_value=None,
-                        value=254.0,
+                        value=252.0,
                         help="Most recent platelet level (*10^9/L) within 90 days prior to surgery.",
                     )
-    # ================== Operative Characteristics ===================
-    with col2:
+
         with st.expander("**Operative Characteristics**", expanded=False):
-            surg_icd = st.selectbox(
-                "Diagnosis",
-                [
-                    "Breast Tumor (Malignant)",  # --> MALIGNANTICD
-                    "Inflammatory Breast Condition",  # --> INFLOTHERICD
-                    "Breast Tumor (Carcinoma in situ)",  # --> CARCINOMAICD
-                    "Breast Lesion (Benign)",  # --> BENIGNICD
-                    "Prophylaxis",  # --> PROPHYLACTICICD
-                    "Previous Mastectomy",  # --> ABSICD
-                    "Abnormal Breast Imaging",  # --> ABBREASTICD
-                    "Congenital Breast Disorder",  # --> CONGICD
-                    "Breast Tumor (Metastatic)",  # --> METASTATICICD
-                ],
-                index=0,
-                help="""
-                    Primary indication for the breast operation, categorized using mutually exclusive NSQIP-based ICD-9/ICD-10 codes, including:
-
-                    &nbsp;&nbsp;&nbsp;&nbsp;• **carcinoma in situ** (ICD-9 233; ICD-10 D05)
-
-                    &nbsp;&nbsp;&nbsp;&nbsp;• **malignant neoplasm** (174, 175, C50)
-
-                    &nbsp;&nbsp;&nbsp;&nbsp;• **prophylactic indications** (V50.4, V84, Z15, Z40)
-
-                    &nbsp;&nbsp;&nbsp;&nbsp;• **abnormal imaging findings** (793.8, R92)
-
-                    &nbsp;&nbsp;&nbsp;&nbsp;• **metastatic disease** (198.8, C79, C78)
-
-                    &nbsp;&nbsp;&nbsp;&nbsp;• **benign breast disorders** (217, D24, 610, N60)
-
-                    &nbsp;&nbsp;&nbsp;&nbsp;• **inflammatory conditions** (611, N61–N64)
-
-                    &nbsp;&nbsp;&nbsp;&nbsp;• **congenital breast disorders** (757.6, Q83)
-
-                    &nbsp;&nbsp;&nbsp;&nbsp;• **acquired absence of breast** (V45.71, Z90.1)
-                    """,
-            )
-            # ========================> Operation Time
-            optime_input_col, optime_check_col = st.columns([3, 2])
-
-            with optime_check_col:
-                st.write("")  # Spacer to align with input
-                optime_unknown = st.checkbox("N/A", key="optime_unknown")
-
-            with optime_input_col:
-                if optime_unknown:
-                    st.number_input(
-                        "Operation Time (minutes)",
-                        value=0.0,
-                        disabled=True,
-                        help="""
-                            Total operative duration in minutes for the principal procedure and related components. 
-                            
-                            *Currently marked as unknown - see ***Imputed Values*** after model prediction at 
-                            bottom of page for more information about how this NA value is dealt with*
-                            """,
-                    )
-                    optime = None
-                else:
-                    optime = st.number_input(
-                        "Operation Time (minutes)",
-                        min_value=0.0,
-                        max_value=None,
-                        value=83.0,
-                        help="Total operative duration in minutes for the principal procedure and related components.",
-                    )
-
-            operyr = st.number_input(
-                "Operation Year",
-                min_value=2008,
-                max_value=2026,
-                value=2026,
-                step=1,
-                help="""
-                    Calendar year during which the operation occurred. 
-
-                    **NOTE:** Only patients from 2008-2024 were used to train/evaluate these models
-                    """,
-            )
             elect_surg = st.selectbox(
                 "Case Type",
                 [
@@ -814,8 +657,6 @@ def get_input_data():
                 help="Hospital admission status at time of the surgical procedure.",
             )
 
-    # ==================Breast Resection Procedures/Axillary Surgery ===================
-    with col3:
         with st.expander("**Breast Resection Procedures**", expanded=False):
             part_cpt = st.selectbox(
                 "Partial mastectomy",
@@ -859,20 +700,6 @@ def get_input_data():
                     **CPT codes: 19307, 19240** 
                     """,
             )
-            rad = st.selectbox(
-                "Radical Mastectomy",
-                [
-                    "None",  # --> 0
-                    "Unilateral",  # --> 1
-                    "Bilateral",  # --> 2+
-                ],
-                index=0,
-                help="""
-                    En bloc removal of the entire breast, pectoralis muscles, and axillary contents (Halsted mastectomy). 
-
-                    **CPT codes: 19305, 19306, 19200, 19220**
-                    """,
-            )
         with st.expander("**Axillary Surgery**", expanded=False):
             slnb = st.selectbox(
                 "Sentinel Lymph Node Biopsy",
@@ -902,7 +729,8 @@ def get_input_data():
                     **CPT codes: 38740, 38745, 19302, 19305, 19306, 19200, 19220, 19162, 19240, 19307**
                     """,
             )
-    # ================== Implant-Based Reconstruction/Autologous Reconstruction/Adjunct & Revision Procedures ===================
+
+    # ================== Reconstruction ===================
     with col4:
         with st.expander("**Implant-Based Reconstruction**", expanded=False):
             imm = st.selectbox(
@@ -919,20 +747,6 @@ def get_input_data():
                     **CPT code: 19340**
                     """,
             )
-            delayed_cpt = st.selectbox(
-                "Delayed Implant Reconstruction",
-                [
-                    "None",  # --> 0
-                    "Unilateral",  # --> 1
-                    "Bilateral",  # --> 2+
-                ],
-                index=0,
-                help="""
-                    Placement of a permanent implant in a previously reconstructed or healed mastectomy site after the index mastectomy procedure.
-                    
-                    **CPT code: 19342**
-                    """,
-            )
             teinsertion = st.selectbox(
                 "Tissue Expander Insertion",
                 [
@@ -945,20 +759,6 @@ def get_input_data():
                     Placement of a breast tissue expander during mastectomy or revision surgery as the first stage of staged implant reconstruction. (
                     
                     **CPT code: 19357**
-                    """,
-            )
-            teexchange = st.selectbox(
-                "Tissue Expander Exchange",
-                [
-                    "None",  # --> 0
-                    "Unilateral",  # --> 1
-                    "Bilateral",  # --> 2+
-                ],
-                index=0,
-                help="""
-                    Exchange of a breast tissue expander for a permanent implant or alternative reconstructive modality as part of staged breast reconstruction. 
-
-                    **CPT code: 11970**
                     """,
             )
 
@@ -977,20 +777,6 @@ def get_input_data():
                     **CPT code: 19364**
                     """,
             )
-            lat = st.selectbox(
-                "Latissimus Dorsi Flap Reconstruction",
-                [
-                    "None",  # --> 0
-                    "Unilateral",  # --> 1
-                    "Bilateral",  # --> 2+
-                ],
-                index=0,
-                help="""
-                    Pedicled latissimus dorsi myocutaneous flap transfer to the breast, with or without implant placement. 
-
-                    **CPT code: 19361**
-                    """,
-            )
             sintramp = st.selectbox(
                 "Pedicled TRAM Flap Reconstruction",
                 [
@@ -1005,64 +791,8 @@ def get_input_data():
                     **CPT code: 19367**
                     """,
             )
-            bitram = st.selectbox(
-                "Bipedicled TRAM Flap Reconstruction",
-                [
-                    "None",  # --> 0
-                    "Unilateral",  # --> 1
-                    "Bilateral",  # --> 2+
-                ],
-                index=0,
-                help="""
-                    Bipedicled TRAM flap breast reconstruction performed in the same operative session. 
-
-                    **CPT code: 19369**
-                    """,
-            )
-            sinsuper = st.selectbox(
-                "Supercharged or Enhanced Unilateral TRAM",
-                [
-                    "None",  # --> 0
-                    "Unilateral",  # --> 1
-                    "Bilateral",  # --> 2+
-                ],
-                index=0,
-                help="""
-                    Pedicled TRAM flap reconstruction with vascular augmentation (“supercharging”) to improve perfusion. 
-
-                    **CPT code: 19368**
-                    """,
-            )
 
         with st.expander("**Adjunct & Revision Procedures**", expanded=False):
-            augprosimp = st.selectbox(
-                "Prosthetic Breast Augmentation",
-                [
-                    "None",  # --> 0
-                    "Unilateral",  # --> 1
-                    "Bilateral",  # --> 2+
-                ],
-                index=0,
-                help="""
-                    Placement of breast implants for cosmetic or reconstructive augmentation. 
-
-                    **CPT code: 19325**
-                    """,
-            )
-            masto = st.selectbox(
-                "Mastopexy",
-                [
-                    "None",  # --> 0
-                    "Unilateral",  # --> 1
-                    "Bilateral",  # --> 2+
-                ],
-                index=0,
-                help="""
-                    Breast lift procedure involving skin and parenchymal reshaping to correct ptosis.
-
-                    **CPT code: 19316**
-                    """,
-            )
             brered = st.selectbox(
                 "Breast Reduction",
                 [
@@ -1075,34 +805,6 @@ def get_input_data():
                     Reduction mammaplasty to remove excess breast tissue and skin for symptomatic macromastia or asymmetry. 
 
                     **CPT code: 19318**
-                    """,
-            )
-            fatgraft = st.selectbox(
-                "Fat Grafting to the Breast",
-                [
-                    "None",  # --> 0
-                    "Unilateral",  # --> 1
-                    "Bilateral",  # --> 2+
-                ],
-                index=0,
-                help="""
-                    Autologous fat harvest, processing, and injection for volume restoration or contour refinement. 
-
-                    **CPT codes: 15771, 15772**
-                    """,
-            )
-            revbreast = st.selectbox(
-                "Revision of Reconstructed Breast",
-                [
-                    "None",  # --> 0
-                    "Unilateral",  # --> 1
-                    "Bilateral",  # --> 2+
-                ],
-                index=0,
-                help="""
-                    Surgical revision of prior breast reconstruction to improve contour, symmetry, or address complications (e.g., capsulorrhaphy, pocket revision). 
-
-                    **CPT code: 19380**
                     """,
             )
             adjtistrans = st.selectbox(
@@ -1119,38 +821,11 @@ def get_input_data():
                     **CPT codes: 14000–14999**
                     """,
             )
-            npwt = st.selectbox(
-                "Negative Pressure Wound Therapy",
-                ["Yes", "No"],
-                index=1,
-                help="""
-                    Application of negative pressure wound therapy systems to a breast surgical site for wound management or closure assistance. 
-
-                    **CPT codes: 97605–97608**
-                    """,
-            )
-            other_cpt = st.selectbox(
-                "Other Reconstructive Techniques",
-                [
-                    "None",  # --> 0
-                    "Unilateral",  # --> 1
-                    "Bilateral",  # --> 2+
-                ],
-                index=0,
-                help="""
-                    Any breast reconstructive approach not captured in the above categories, including uncommon flaps or hybrid methods. 
-
-                    **Various CPT codes not specified**
-                    """,
-            )
-
     # ================== Create input DF ===================
     input_data = pd.DataFrame(
         {
             ## Demographics ##
             "AGE": [age],
-            "SEX": [util.transform_sex(sex)],
-            "ETHNICITY_HISPANIC": [util.transform_hispanic(hispanic)],
             "RACE": [util.transform_race(race)],
             ## BMI ##
             "HEIGHT": [height],
@@ -1159,29 +834,17 @@ def get_input_data():
             "SMOKE": [util.transform_yes_no(smoke)],
             "DIABETES": [util.transform_diab(diabetes)],
             "HXCOPD": [util.transform_yes_no(hxcopd)],
-            "DYSPNEA": [util.transform_yes_no_unknown(dyspnea, "DYSPNEA")],
             "HXCHF": [util.transform_yes_no(hxchf)],
             "HYPERMED": [util.transform_yes_no(hypermed)],
-            "DIALYSIS": [util.transform_yes_no(dialysis)],
-            "RENAFAIL": [util.transform_yes_no_unknown(renafail, "RENAFAIL")],
             "BLEEDDIS": [util.transform_yes_no(bleed)],
-            "WTLOSS": [util.transform_yes_no_unknown(wtloss, "WTLOSS")],
-            "ASCITES": [util.transform_yes_no(ascites)],
-            "STEROID": [util.transform_yes_no(steroid)],
             "DISCANCR": [util.transform_yes_no(discancr)],
-            "VENTILAT": [util.transform_yes_no(vent)],
-            "WNDINF": [util.transform_yes_no_unknown(wndinf, "WNDINF")],
             "ASACLAS": [util.transform_asa(asa_class)],
-            "TRANSFUS": [util.transform_yes_no(transfus)],
             ## Pre-Op Lab (Blood)
             "PRALBUM": [pralbumin],
             "PRWBC": [prwbc],
             "PRHCT": [prhct],
             "PRPLATE": [prplate],
             # Op Chars
-            "SURGINDICD": [util.transform_icd(surg_icd)],
-            "OPTIME": [optime],
-            "OPERYR": [operyr],
             "URGENCY": [util.transform_casetype(elect_surg)],
             "ANESTHES": [util.transform_anes(anesth)],
             "SURGSPEC": [util.transform_spec(surg_spec)],
@@ -1189,31 +852,19 @@ def get_input_data():
             ## Breast Resection Procedures
             "PARTIALCPT": [util.transform_ord_cpt(part_cpt)],
             "SUBSIMPLECPT": [util.transform_ord_cpt(sub_simp)],
-            "RADICALCPT": [util.transform_ord_cpt(rad)],
             "MODIFIEDRADICALCPT": [util.transform_ord_cpt(modrad)],
             # Axillary Surgery
             "SNLBCPT": [util.transform_ord_cpt(slnb)],
             "ALNDCPT": [util.transform_ord_cpt(alnd)],
             ## Implant-Based Reconstruction
             "IMMEDIATECPT": [util.transform_ord_cpt(imm)],
-            "DELAYEDCPT": [util.transform_ord_cpt(delayed_cpt)],
             "TEINSERTIONCPT": [util.transform_ord_cpt(teinsertion)],
-            "TEEXPANDERCPT": [util.transform_ord_cpt(teexchange)],
             ## Autologous Recon
             "FREECPT": [util.transform_ord_cpt(free_cpt)],
-            "LATCPT": [util.transform_ord_cpt(lat)],
             "SINTRAMCPT": [util.transform_ord_cpt(sintramp)],
-            "BITRAMCPT": [util.transform_ord_cpt(bitram)],
-            "SINTRAMSUPERCPT": [util.transform_ord_cpt(sinsuper)],
             ## Adjunct & Revision
-            "AUGPROSIMPCPT": [util.transform_ord_cpt(augprosimp)],
-            "MASTOCPT": [util.transform_ord_cpt(masto)],
             "BREASTREDCPT": [util.transform_ord_cpt(brered)],
-            "FATGRAFTCPT": [util.transform_ord_cpt(fatgraft)],
-            "REVRECBREASTCPT": [util.transform_ord_cpt(revbreast)],
             "ADJTISTRANSCPT": [util.transform_ord_cpt(adjtistrans)],
-            "NPWTCPT": [util.transform_yes_no(npwt)],
-            "OTHERRECONTECHCPT": [util.transform_ord_cpt(other_cpt)],
         }
     )
     ## Maps column name to unknown
@@ -1253,18 +904,6 @@ def get_input_data():
             "Value": prplate,
             "Display Name": "Platelet Count (*10^9/L)",
             "round rule": lambda x: round(x, 2),
-        },
-        "OPTIME": {
-            "Value": optime,
-            "Display Name": "Operation Time (min)",
-            "round rule": lambda x: round(x, 2),
-        },
-        # this shouldnt run, dont give option
-        ## just including for completeness
-        "OPERYR": {
-            "Value": operyr,
-            "Display Name": "Operation Year",
-            "round rule": lambda x: int(round(x)),
         },
     }
     # Get list of imputed vals
@@ -1360,7 +999,7 @@ def create_shap_plot(shap_data, num_feats):
         fontsize=15,
     )
     ax.set_title(
-        "What’s driving this patient’s predicted risk?",
+        "What's driving this patient's predicted risk?",
         fontweight="bold",
         pad=15,
         fontsize=20,
@@ -1422,35 +1061,6 @@ def create_shap_plot(shap_data, num_feats):
     return fig
 
 
-def check_filter_cols(input_data):
-    vars_to_check = [
-        "partialCPT",
-        "subsimpleCPT",
-        "radicalCPT",
-        "modifiedRadicalCPT",
-        "immediateCPT",
-        "delayedCPT",
-        "teinsertionCPT",
-        "teexpanderCPT",
-        "freeCPT",
-        "latCPT",
-        "SinTramCPT",
-        "SinTramSuperCPT",
-        "BiTramCPT",
-        "MastoCPT",
-        "BreastRedCPT",
-        "FatGraftCPT",
-        "AdjTisTransCPT",
-        "AugProsImpCPT",
-        "OtherReconTechCPT",
-        "RevRecBreastCPT",
-    ]
-    for var in vars_to_check:
-        if input_data[var.upper()].iloc[0] != "0":
-            return True
-    return False
-
-
 def show_clinical_results(display_name, folder_name, input_data):
     """
     Render clinical output.
@@ -1472,19 +1082,19 @@ def show_clinical_results(display_name, folder_name, input_data):
             model, preprocessor, explainer = load_model_pipeline_explainer(folder_name)
             ## Preprocess
             feature_names = preprocessor.get_feature_names_out()
-            data_transformed = np.array(preprocessor.transform(input_data))
+            transormed = preprocessor.transform(input_data)
+            data_transformed = np.array(transormed)
             processed_data = pd.DataFrame(data_transformed, columns=feature_names)
             processed_data = remove_prefix(processed_data)
             for col in processed_data.columns:
                 processed_data[col] = pd.to_numeric(processed_data[col])
-
             # Compute hash from processed_data (after transformation)
             hash_string = f"{folder_name}_{processed_data.to_csv()}"
             processed_data_hash = hashlib.md5(hash_string.encode()).hexdigest()
             ## predict
             probabilities = model.predict_proba(processed_data)[:, 1]
 
-            # Extract scalar probability
+            ## Extract scalar probability
             if probabilities.ndim == 1:
                 prob_positive = float(probabilities[0])
             else:
@@ -1493,8 +1103,8 @@ def show_clinical_results(display_name, folder_name, input_data):
             ## Get all test output
             all_probs, all_labels = util.load_population_probs(folder_name)
             tot_patients = len(all_labels)
-            # ================== Display Results ===================
-            # ========== ROW 1: Risk Assessment ==========
+            # # ================== Display Results ===================
+            # # ========== ROW 1: Risk Assessment ==========
             st.markdown("## Risk Assessment")
 
             col_a1, col_b1 = st.columns(2)
@@ -1537,8 +1147,7 @@ def show_clinical_results(display_name, folder_name, input_data):
             with col_a2:
                 model_used = CHOSEN_MODEL_DICT[folder_name]
                 explainer_used = get_explainer_name(model_used)
-                st.info(
-                    """
+                st.info("""
                     ***How to read this chart***
 
                     - These bars explain why ***this specific patient*** received their particular risk estimate, not which factors matter most across all patients.
@@ -1549,58 +1158,52 @@ def show_clinical_results(display_name, folder_name, input_data):
 
                     **About the percentages**
 
-                    The percentages show each factor’s **relative share** of the total explanation for why this patient 
-                    differs from the average patient (absolute contributions sum to 100%). For example, if "Setting: 
+                    The percentages show each factor’s **relative share** of the total explanation for why this patient
+                    differs from the average patient (absolute contributions sum to 100%). For example, if "Setting:
                     Inpatient" shows "-12%", this factor accounts for 12% of the total model influence and decreases risk.
 
-                    """
-                )
+                    """)
                 with st.expander("**Important Considerations**", expanded=False):
-                    st.markdown(
-                        """
+                    st.markdown("""
                         **Why some factors may appear high on this chart**
 
-                        - This chart explains how the model estimated risk *for this individual patient*. Contributions are SHAP-derived 
+                        - This chart explains how the model estimated risk *for this individual patient*. Contributions are SHAP-derived
                         values that reflect learned model relationships from the training data (including interactions), not cause-and-effect.
 
-                        - A value of *“None”* for a procedure indicates that the procedure was marked as **not performed** 
-                        (as opposed to unilateral or bilateral). The model compares patients without the procedure to similar 
-                        patients who did receive it, which can increase or decrease the predicted risk of the patient depending 
-                        on observed outcome patterns.
+                        - A value of *“No”* for a procedure/comorbidity indicates that the procedure was **not performed**/the comorbidity was **not present**.
+                        The model compares patients without the procedure/comorbidity to similar patients who did have it, which can increase or
+                        decrease the predicted risk of the patient depending on observed outcome patterns.
 
-                        - A value of *“Unknown”* means the information was **not documented or unavailable**, not that the 
-                        condition was absent. Missing documentation can still influence predictions because it occurred systematically 
+                        - A value of *“Unknown”* means the information was **not documented or unavailable**, not that the
+                        condition was absent. Missing documentation can still influence predictions because it occurred systematically
                         across certain time periods rather than at random.
 
-                        - **Year of operation** may appear important because it captures broader temporal trends—such as evolving 
+                        - **Year of operation** may appear important because it captures broader temporal trends—such as evolving
                         surgical techniques, perioperative care pathways, patient selection, or documentation practices.
 
-                        - Unexpected results should be interpreted as a prompt to consider clinical context (e.g., documentation patterns, 
-                        case complexity, or interacting factors) and to apply clinical judgment, rather than as evidence that a factor 
+                        - Unexpected results should be interpreted as a prompt to consider clinical context (e.g., documentation patterns,
+                        case complexity, or interacting factors) and to apply clinical judgment, rather than as evidence that a factor
                         directly causes the outcome.
-                        """
-                    )
+                        """)
                 with st.expander(
                     "**Technical notes for interested users**", expanded=False
                 ):
-                    st.markdown(
-                        f"""
-                        - Feature contributions are computed using SHAP (SHapley Additive exPlanations), which attributes 
+                    st.markdown(f"""
+                        - Feature contributions are computed using SHAP (SHapley Additive exPlanations), which attributes
                         the model’s prediction to individual feature values for this specific patient.
 
                         - This particular plot was generated using SHAP's *{explainer_used}*
 
-                        - The explanation is *contrastive*: it explains how this patient differs from the baseline 
+                        - The explanation is *contrastive*: it explains how this patient differs from the baseline
                         (the average prediction over our test cohort).
 
-                        - Explanation values are computed in the log-odds space from the raw, uncalibrated model, then 
-                        are normalized such that absolute values sum to 100%, maintaining the sign, ranking, and relative 
-                        magnitude of each feature's impact 
+                        - Explanation values are computed in the log-odds space from the raw, uncalibrated model, then
+                        are normalized such that absolute values sum to 100%, maintaining the sign, ranking, and relative
+                        magnitude of each feature's impact
 
-                        - Calibrated risk predictions used to allocate patients into risk categories apply a monotonic transformation 
+                        - Calibrated risk predictions used to allocate patients into risk categories apply a monotonic transformation
                         (Platt scaling) on raw model output that preserves the feature importance ranking and direction displayed in this plot.
-                        """
-                    )
+                        """)
 
             with col_b2:
                 # SHAP feature count input
@@ -1613,15 +1216,14 @@ def show_clinical_results(display_name, folder_name, input_data):
                     key=f"n_feats_{folder_name}",
                 )
                 st.markdown("")
-                # n_feats = 10
                 # SHAP plot
                 # Compute SHAP data once (cached)
                 shap_data = compute_shap_data(
-                    explainer,
-                    processed_data,
-                    preprocessor,
-                    processed_data_hash,
-                    folder_name,
+                    _explainer=explainer,
+                    _input_data=processed_data,
+                    _pipeline=preprocessor,
+                    processed_data_hash=processed_data_hash,
+                    outcome_name=folder_name,
                 )
                 # Create plot (fast, regenerates only when n_feats changes)
                 shap_fig = create_shap_plot(shap_data, n_feats)
@@ -1630,7 +1232,7 @@ def show_clinical_results(display_name, folder_name, input_data):
 
             # ================== Dropdown to Show Model Details ===================
             st.markdown("---")
-            with st.expander(f"**Extra information on model output**", expanded=False):
+            with st.expander(f"Extra information on model output", expanded=False):
                 show_model_details(
                     display_name,
                     folder_name,
@@ -1647,12 +1249,6 @@ def get_full_model_name(model_abrv):
         return "XGBoost"
     elif model_abrv == "lgbm":
         return "LightGBM"
-    elif model_abrv == "stack":
-        return "Stacked Generalization"
-    elif model_abrv == "lr":
-        return "Logistic Regression"
-    elif model_abrv == "nn":
-        return "Neural Network"
     else:
         raise ValueError(f"Unrecognized model name: {model_abrv}")
 
@@ -1739,10 +1335,7 @@ def show_model_details(display_name, outcome_abrv, prob_positive):
         bin_idx = np.digitize([prob_positive], cutoffs[1:])[0]
         threshold_data = []
         for i, lab in enumerate(labels):
-            if outcome_abrv == "mort":
-                threshold_range = f"{cutoffs[i]:.3%} – {cutoffs[i+1]:.3%}"
-            else:
-                threshold_range = f"{cutoffs[i]:.2%} – {cutoffs[i+1]:.2%}"
+            threshold_range = f"{cutoffs[i]:.2%} – {cutoffs[i+1]:.2%}"
             threshold_data.append(
                 {"Risk Category": lab, "Model Output Range": threshold_range}
             )
@@ -1763,5 +1356,8 @@ def show_model_details(display_name, outcome_abrv, prob_positive):
         st.markdown(html_table, unsafe_allow_html=True)
     with col_b:
         st.markdown(
-            f"Risk categories are defined using cutoffs taken from the {chosen_model} model’s predicted scores in the training and validation cohorts (n=627,070) for the {display_name} outcome. These cutoffs follow a logarithmic scale so that higher‑risk ranges are more finely separated than very low‑risk ranges."
+            f"""Risk categories are defined using cutoffs taken from the {chosen_model} model’s 
+            predicted scores in the training and validation cohorts (n=334,623) for the {display_name} 
+            outcome. These cutoffs follow a logarithmic scale so that lower-risk ranges, where the 
+            majority of patients fall, are more finely separated."""
         )

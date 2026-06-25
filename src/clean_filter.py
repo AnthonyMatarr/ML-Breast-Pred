@@ -8,6 +8,76 @@ from src.data_utils import get_feature_lists
 ##############################################################################
 ################################### CLEAN ####################################
 ##############################################################################
+def get_code_cols(df, include_cpt=False):
+    """
+    Return the names of CPT/ICD code columns.
+
+    Identifies columns holding diagnosis (``PODIAG``) or procedure (``CPT``)
+    codes, excluding the curated single-purpose CPT flag columns in ``skip_cols``
+    and the bare ``CPT`` column.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        NSQIP df to inspect
+    include_cpt : bool
+        If True:
+            keep generic ``CPT`` code columns (still excluding
+            ``skip_cols``)
+        If False:
+            the skip-list filter is only applied within
+            the ``CPT`` branch.
+
+    Returns
+    -------
+    list[str]
+        Names of the matching code columns.
+    """
+    skip_cols = [
+        "SNLBCPT",
+        "ALNDCPT",
+        "PARTIALCPT",
+        "SUBSIMPLECPT",
+        "RADICALCPT",
+        "MODIFIEDRADICALCPT",
+        "PROCANATCPT",
+        "IMMEDIATECPT",
+        "DELAYEDCPT",
+        "TEINSERTIONCPT",
+        "TEEXPANDERCPT",
+        "FREECPT",
+        "LATCPT",
+        "SINTRAMCPT",
+        "SINTRAMSUPERCPT",
+        "BITRAMCPT",
+        "MASTOCPT",
+        "BREASTREDCPT",
+        "FATGRAFTCPT",
+        "ADJTISTRANSCPT",
+        "AUGPROSIMPCPT",
+        "OTHERRECONTECHCPT",
+        "REVRECBREASTCPT",
+        "NPWTCPT",
+    ]
+    if include_cpt:
+        code_cols = [
+            col
+            for col in df
+            if (
+                ("PODIAG" in col or "CPT" in col)
+                and col != "CPT"
+                and col.upper() not in skip_cols
+            )
+        ]
+    else:
+        code_cols = [
+            col
+            for col in df
+            if ("PODIAG" in col or "CPT" in col and col.upper() not in skip_cols)
+        ]
+    return code_cols
+
+
 def combine_columns(row):
     """Combine 5 columns with hierarchy: Yes > No > NaN"""
     # Check if any value is "Yes"
@@ -21,899 +91,220 @@ def combine_columns(row):
         return np.nan
 
 
-def merge_dfs(data_dict, verbose=False):
+############################################
+########### Year-specific helpers ##########
+############################################
+def clean_08_10(df, include_cpt):
+    df_w_codes = df.copy()
+    ######################################
+    ################ 2008 ################
+    ######################################
+    # {'READ', 'DISCHDEST', 'UNPLREAD'}
+    df_w_codes.rename(
+        columns={
+            "EMERGNCY": "URGENCY",
+            "RETURNOR": "UNPLNREOP",
+        },
+        inplace=True,
+    )
+    ## Readmission
+    df_w_codes["READ"] = "Unknown_08_10"
+    ## Unplanned Readmission
+    df_w_codes["UNPLNREAD"] = "Unknown_08_10"
+    ## Discharge Dest
+    df_w_codes["DISCHDEST"] = "Unknown_08_10"
+    df_w_codes.reset_index(drop=True, inplace=True)
+    # No code df
+    drop_cols = get_code_cols(df_w_codes, include_cpt)
+    df_no_codes = df_w_codes.drop(drop_cols, axis=1)
+    return df_w_codes, df_no_codes
+
+
+def clean_11(df, include_cpt):
+    df_w_codes = df.copy()
+    df_w_codes.rename(
+        columns={
+            "EMERGNCY": "URGENCY",
+            "RETURNOR": "UNPLNREOP",
+            "READMISSION": "READ",
+            "UNPLANREADMISSION": "UNPLNREAD",
+        },
+        inplace=True,
+    )
+    df_w_codes.reset_index(drop=True, inplace=True)
+    ## DROP codes
+    drop_cols = get_code_cols(df_w_codes, include_cpt)
+    df_no_codes = df_w_codes.drop(drop_cols, axis=1)
+    return df_w_codes, df_no_codes
+
+
+def clean_12_20(df, include_cpt, year):
     """
-    Merges NSQIP dataframes from 2008-2023, normalizing values to append vertically
+    Clean for 12-20
+    - Slight differences in combining cols for 12-14 and 15-20 cohorts
+    - Note that this is eventually called for 21-24
+    - 21-24 do not have BUT won't raise error EMERGNCY col
+        - clean_21 renames `CASETYPE` --> `URGENCY
+        - clean_22_24 renames `CASETYPE` --> `URGENCY`,
+    - ONLY years 15-21 need to rename `BLEEDIS`--> `BLEEDDIS`, but will not raise error
+    """
+    df_w_codes = df.copy()
+    df_w_codes.rename(
+        columns={
+            "EMERGNCY": "URGENCY",
+            "BLEEDIS": "BLEEDDIS",
+        },
+        inplace=True,
+    )
+    ## Unplanned ReOp
+    unplanned_reop_cols = [
+        "RETURNOR",
+        "REOPERATION1",
+        "REOPERATION2",
+        "REOPERATION3",
+    ]
+    df_w_codes["UNPLNREOP"] = df_w_codes[unplanned_reop_cols].apply(
+        combine_columns, axis=1
+    )
+    df_w_codes.drop(unplanned_reop_cols, axis=1, inplace=True)
+    ## Unplanned Readmission
+    unplanned_read_cols = [
+        "UNPLANNEDREADMISSION1",
+        "UNPLANNEDREADMISSION2",
+        "UNPLANNEDREADMISSION3",
+        "UNPLANNEDREADMISSION4",
+        "UNPLANNEDREADMISSION5",
+    ]
+
+    ## Readmission
+    read_cols = [
+        "READMISSION1",
+        "READMISSION2",
+        "READMISSION3",
+        "READMISSION4",
+        "READMISSION5",
+    ]
+    if year in range(2011, 2015):  # 2011-2014
+        unplanned_read_cols.append("UNPLANREADMISSION")
+        read_cols.append("READMISSION")
+    # Unplanned Readmission
+    df_w_codes["UNPLNREAD"] = df_w_codes[unplanned_read_cols].apply(
+        combine_columns, axis=1
+    )
+    df_w_codes.drop(unplanned_read_cols, axis=1, inplace=True)
+    # Readmission
+    df_w_codes["READ"] = df_w_codes[read_cols].apply(combine_columns, axis=1)
+    df_w_codes.drop(read_cols, axis=1, inplace=True)
+
+    df_w_codes.reset_index(drop=True, inplace=True)
+    drop_cols = get_code_cols(df_w_codes, include_cpt)
+    df_no_codes = df_w_codes.drop(drop_cols, axis=1)
+    return df_w_codes, df_no_codes
+
+
+def clean_22_24(df, include_cpt):
+    """
+    Same as 15-20 w/ addition of:
+    1) CASETYPE instead of EMERGNCY
+    """
+    df_w_codes = df.copy()
+
+    df_w_codes.rename(columns={"CASETYPE": "URGENCY"}, inplace=True)
+    # 2) adding missing cols
+    df_w_codes["WTLOSS"] = "Unknown_21_24"
+    df_w_codes["WNDINF"] = "Unknown_21_24"
+    df_w_codes["DYSPNEA"] = "Unknown_21_24"
+    # can just put arbitrary year bc not in 2012-2014
+    return clean_12_20(df_w_codes, include_cpt, year=2022)
+
+
+def clean_21(df, include_cpt):
+    """
+    Same as 22-24 w/ addition of missing cols:
+    1) RENAINSF
+    2) RENAFAIL
+    """
+    ## Same as  w/ addition of adding missing cols
+    df_w_codes = df.copy()
+    ## Add missing cols
+    df_w_codes["RENAINSF"] = "Unknown_21"
+    df_w_codes["RENAFAIL"] = "Unknown_21"
+    return clean_22_24(df_w_codes, include_cpt)
+
+
+def merge_dfs(data_dict, include_cpt, expcted_rows=69, verbose=False):
+    """
+    Merges NSQIP dataframes from 2008-2024, normalizing values to append vertically
 
     Parameters
     ----------
     data_dict: dict
         Dictionary mapping NSQIP file name to pandas df
     """
-    data_dict_clean = {}
-    no_codes_dict = {}
-    ######################################
-    ################ 2008 ################
-    ######################################
-    # {'READ', 'DISCHDEST', 'UNPLREAD'}
-    temp_df = data_dict["NSQIP_08_cpt"].copy()
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    temp_df.rename(columns={"RETURNOR": "UnplReOp"}, inplace=True)
-    ## Readmission
-    temp_df["ReAd"] = None
-    ## Unplanned Readmission
-    temp_df["UnplReAd"] = None
-    ## Discharge Dest
-    temp_df["DISCHDEST"] = None
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["08"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["08"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["08"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2009 ################
-    ######################################
-    # {'READ', 'DISCHDEST', 'UNPLREAD'}
-    temp_df = data_dict["NSQIP_09_cpt"].copy()
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    temp_df.rename(columns={"RETURNOR": "UnplReOp"}, inplace=True)
-    ## Readmission
-    temp_df["ReAd"] = None
-    ## Unplanned Readmission
-    temp_df["UnplReAd"] = None
-    ## Discharge Dest
-    temp_df["DISCHDEST"] = None
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["09"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["09"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["09"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2010 ################
-    ######################################
-    # {'READ', 'DISCHDEST', 'UNPLREAD'}
-    temp_df = data_dict["NSQIP_10_cpt"].copy()
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    temp_df.rename(columns={"RETURNOR": "UnplReOp"}, inplace=True)
-    ## ReAd
-    temp_df["ReAd"] = None
-    ## Unplanned ReAd
-    temp_df["UnplReAd"] = None
-    ## Discharge Dest
-    temp_df["DISCHDEST"] = None
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["10"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["10"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["10"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2011 ################
-    ######################################
-    # {'UNPLREAD'}
-    temp_df = data_dict["NSQIP_11_cpt"].copy()
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unpl_read_cols = ["RETURNOR", "REOPERATION"]
-    temp_df["UnplReOp"] = temp_df[unpl_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unpl_read_cols, axis=1, inplace=True)
-    ## Readmission
-    temp_df.rename(columns={"READMISSION": "ReAd"}, inplace=True)
-    ## Unplanned Readmission
-    temp_df["UnplReAd"] = None
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["11"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["11"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["11"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2012 ################
-    ######################################
-    temp_df = data_dict["NSQIP_12_cpt"].copy()
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = [
-        "RETURNOR",
-        "REOPERATION",
-        "REOPERATION1",
-        "REOPERATION2",
-        "REOPERATION3",
-    ]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION",
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["12"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["12"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["12"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2013 ################
-    ######################################
-    temp_df = data_dict["NSQIP_13_cpt"].copy()
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = [
-        "RETURNOR",
-        "REOPERATION",
-        "REOPERATION1",
-        "REOPERATION2",
-        "REOPERATION3",
-    ]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION",
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["13"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["13"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["13"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2014 ################
-    ######################################
-    temp_df = data_dict["NSQIP_14_cpt"].copy()
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = [
-        "RETURNOR",
-        "REOPERATION",
-        "REOPERATION1",
-        "REOPERATION2",
-        "REOPERATION3",
-    ]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION",
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["14"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["14"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["14"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2015 ################
-    ######################################
-    temp_df = data_dict["NSQIP_15_cpt"].copy()
-    temp_df.rename(columns={"BLEEDIS": "BLEEDDIS"}, inplace=True)
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = ["RETURNOR", "REOPERATION1", "REOPERATION2", "REOPERATION3"]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["15"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["15"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["15"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2016 ################
-    ######################################
-    temp_df = data_dict["NSQIP_16_cpt"].copy()
-    temp_df.rename(columns={"BLEEDIS": "BLEEDDIS"}, inplace=True)
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = ["RETURNOR", "REOPERATION1", "REOPERATION2", "REOPERATION3"]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["16"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["16"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["16"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2017 ################
-    ######################################
-    temp_df = data_dict["NSQIP_17_cpt"].copy()
-    temp_df.rename(columns={"BLEEDIS": "BLEEDDIS"}, inplace=True)
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = ["RETURNOR", "REOPERATION1", "REOPERATION2", "REOPERATION3"]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["17"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["17"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["17"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2018 ################
-    ######################################
-    temp_df = data_dict["NSQIP_18_cpt"].copy()
-    temp_df.rename(columns={"BLEEDIS": "BLEEDDIS"}, inplace=True)
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = ["RETURNOR", "REOPERATION1", "REOPERATION2", "REOPERATION3"]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["18"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["18"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["18"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2019 ################
-    ######################################
-    temp_df = data_dict["NSQIP_19_cpt"].copy()
-    temp_df.rename(columns={"BLEEDIS": "BLEEDDIS"}, inplace=True)
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = ["RETURNOR", "REOPERATION1", "REOPERATION2", "REOPERATION3"]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["19"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["19"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["19"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2020 ################
-    ######################################
-    temp_df = data_dict["NSQIP_20_cpt"].copy()
-    temp_df.rename(columns={"BLEEDIS": "BLEEDDIS"}, inplace=True)
-    temp_df.rename(columns={"EMERGNCY": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = ["RETURNOR", "REOPERATION1", "REOPERATION2", "REOPERATION3"]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["20"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["20"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["20"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2021 ################
-    ######################################
-    # {'RENAINSF', 'WTLOSS', 'WNDINF', 'RENAFAIL', 'DYSPNEA'}
-    temp_df = data_dict["NSQIP_21_cpt"].copy()
-    temp_df.rename(columns={"BLEEDIS": "BLEEDDIS"}, inplace=True)
-    temp_df.rename(columns={"CASETYPE": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = ["RETURNOR", "REOPERATION1", "REOPERATION2", "REOPERATION3"]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-    ## Not included
-    temp_df["RENAINSF"] = None
-    temp_df["RENAFAIL"] = None
-    temp_df["WTLOSS"] = None
-    temp_df["WNDINF"] = None
-    temp_df["DYSPNEA"] = None
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["21"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["21"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["21"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2022 ################
-    ######################################
-    # {'WNDINF', 'WTLOSS', 'DYSPNEA'}
-    temp_df = data_dict["NSQIP_22_cpt"].copy()
-    temp_df.rename(columns={"CASETYPE": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = ["RETURNOR", "REOPERATION1", "REOPERATION2", "REOPERATION3"]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-    # Not included
-    temp_df["WTLOSS"] = None
-    temp_df["WNDINF"] = None
-    temp_df["DYSPNEA"] = None
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["22"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["22"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["22"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2023 ################
-    ######################################
-    # {'WNDINF', 'WTLOSS', 'DYSPNEA'}
-    temp_df = data_dict["NSQIP_23_cpt"].copy()
-    temp_df.rename(columns={"CASETYPE": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = ["RETURNOR", "REOPERATION1", "REOPERATION2", "REOPERATION3"]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-    # Not included
-    temp_df["WTLOSS"] = None
-    temp_df["WNDINF"] = None
-    temp_df["DYSPNEA"] = None
-    temp_df.reset_index(drop=True, inplace=True)
-    data_dict_clean["23"] = temp_df
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["23"] = temp_df.drop(temp_drop_cols, axis=1)
-    if verbose:
-        print(no_codes_dict["23"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
-    ######################################
-    ################ 2024 ################
-    ######################################
-    # {'WNDINF', 'WTLOSS', 'DYSPNEA'}
-    temp_df = data_dict["NSQIP_24_cpt"].copy()
-    temp_df.rename(columns={"CASETYPE": "Urgency"}, inplace=True)
-    ## Unplanned ReOp
-    unplanned_reop_cols = ["RETURNOR", "REOPERATION1", "REOPERATION2", "REOPERATION3"]
-    temp_df["UnplReOp"] = temp_df[unplanned_reop_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_reop_cols, axis=1, inplace=True)
-    ## Readmission
-    read_cols = [
-        "READMISSION1",
-        "READMISSION2",
-        "READMISSION3",
-        "READMISSION4",
-        "READMISSION5",
-    ]
-    temp_df["ReAd"] = temp_df[read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(read_cols, axis=1, inplace=True)
-    ## Unplanned Readmission
-    unplanned_read_cols = [
-        "UNPLANNEDREADMISSION1",
-        "UNPLANNEDREADMISSION2",
-        "UNPLANNEDREADMISSION3",
-        "UNPLANNEDREADMISSION4",
-        "UNPLANNEDREADMISSION5",
-    ]
-    temp_df["UnplReAd"] = temp_df[unplanned_read_cols].apply(combine_columns, axis=1)
-    temp_df.drop(unplanned_read_cols, axis=1, inplace=True)
-    # Not included
-    temp_df["WTLOSS"] = None
-    temp_df["WNDINF"] = None
-    temp_df["DYSPNEA"] = None
-    temp_df.reset_index(drop=True, inplace=True)
-    ## DROP codes
-    temp_drop_cols = [col for col in temp_df if ("PODIAG" in col or "CPT" in col)]
-    no_codes_dict["24"] = temp_df.drop(temp_drop_cols, axis=1)
-    data_dict_clean["24"] = temp_df
-    if verbose:
-        print(no_codes_dict["24"].shape)
-    else:
-        print(f"{len(no_codes_dict)}/{len(data_dict)}")
+    w_codes_dict = {}  # fill w/ cleaned data (including code cols)
+    no_codes_dict = {}  # fill w/ cleaned data (excluding code cols)
+    for year in range(2008, 2025):  # 2008-2024
+        yr_str = str(year)[-2:]  # last 2 digits
+        nsqip_str = f"NSQIP_{yr_str}_cpt"
+        if year in range(2008, 2011):  # 2008-2010
+            df_w_codes, df_no_codes = clean_08_10(data_dict[nsqip_str], include_cpt)
+        elif year == 2011:
+            df_w_codes, df_no_codes = clean_11(data_dict[nsqip_str], include_cpt)
+        elif year in range(2012, 2021):  # 2012-2020
+            df_w_codes, df_no_codes = clean_12_20(
+                data_dict[nsqip_str], include_cpt, year=year
+            )
+        elif year == 2021:
+            df_w_codes, df_no_codes = clean_21(data_dict[nsqip_str], include_cpt)
+        elif year in range(2022, 2025):  # 2022-2024
+            df_w_codes, df_no_codes = clean_22_24(data_dict[nsqip_str], include_cpt)
+        w_codes_dict[yr_str] = df_w_codes
+        no_codes_dict[yr_str] = df_no_codes
+        if verbose:
+            print(f"{yr_str}...")
+            print(df_no_codes.shape)
+        else:
+            print(f"{len(no_codes_dict)}/{len(data_dict)}")
+    ##################################################
+    ########### ENSURE we did things right ###########
+    ##################################################
     ###### ENSURE we did things right #####
-    try:
-        assert len(data_dict_clean) == len(data_dict)
-        assert len(data_dict_clean) == len(no_codes_dict)
+    try:  ### Right number of dfs
+        assert len(w_codes_dict) == len(data_dict)
+        assert len(w_codes_dict) == len(no_codes_dict)
     except AssertionError:
         print("Dicts do not match in size...")
-        print(f" New length w/ codes: {len(data_dict_clean)}")
+        print(f" New length w/ codes: {len(w_codes_dict)}")
         print(f" New length w/o codes: {len(no_codes_dict)}")
         print(f" OG length: {len(data_dict)}")
         raise AssertionError
     for year1, df1 in no_codes_dict.items():
-        try:
-            assert df1.shape[1] == 68
-        except AssertionError:
-            raise AssertionError(f"Expected 68 rows, got {df1.shape[1]} instead")
+        if df1.shape[1] != expcted_rows:
+            raise ValueError(
+                f"Expected {expcted_rows} rows, got {df1.shape[1]} instead"
+            )
         for year2, df2 in no_codes_dict.items():
+            if year1 == year2:  # no need to compare the same dataset
+                continue
             cols_1 = set(df1.columns)
             cols_2 = set(df2.columns)
-            assert cols_2 - cols_1 == set()
-            assert cols_1 - cols_2 == set()
+            try:
+                assert cols_2 - cols_1 == set()
+                assert cols_1 - cols_2 == set()
+            except AssertionError:
+                print(f"In {year1} but not {year2}: {cols_1-cols_2}")
+                print(f"In {year2} but not {year1}: {cols_2-cols_1}")
+                raise AssertionError("Columns do not match in dfs!")
     ##### Combine
     combined_df_no_codes = pd.concat(no_codes_dict.values(), ignore_index=True)
-    combined_df_w_codes = pd.concat(data_dict_clean.values(), ignore_index=True)
+    combined_df_w_codes = pd.concat(w_codes_dict.values(), ignore_index=True)
     print(f"Combined Shape No Codes: {combined_df_no_codes.shape}")
     print(f"Combined Shape With Codes: {combined_df_w_codes.shape}")
+    ## Clean
+    combined_df_no_codes["UNPLNREOP"] = (
+        combined_df_no_codes["UNPLNREOP"].astype(str).apply(lambda x: x.strip())
+    )
     return combined_df_no_codes, combined_df_w_codes
-
-
-def clean_dfs(
-    *_,
-    combined_df,
-    replace_dict,
-    na_drop_cols,
-    recon_cols,
-    mast_cols,
-    surg_ind_cols,
-    num_cols,
-    drop_cols,
-) -> pd.DataFrame:
-    """
-    Implements various cleaning steps to an NSQIP combined df
-
-    Raises
-    ------
-    ValueError:
-        if a positional argument is passed
-    Parameters
-    ----------
-    combined_df: pandas dataframe
-        Tabular dataframe containing NSQIP data combined accross years (result of merge_dfs)
-    replace_dict: dict{dict}
-        Dictionary mapping column names to a sub-dictionary mapping old instance names to new ones
-        Example: {"SEX": {"non-bi": "non-binary", "fem": "female"}, ...}
-    na_drop_cols: list[str]
-        Specify names of columns for which entries with NA values should be dropped
-    recon_cols: list[str]
-        Specify names of derived reconstruction variables (CPT)
-        Used to create timing of surgery column
-    mast_cols: list[str]
-        Specify names of derived mastectomny variables (CPT)
-        Used to create timing of surgery column
-    surg_ind_cols: list[str]
-        Specify names of derived surgical indicator variables (ICD)
-        Combined into a single feature bc of mututal exclusivity
-
-    Returns
-    -------
-    cleaned pandas dataframe
-    """
-    if _ != tuple():
-        raise ValueError("This function does not take positional arguments!")
-    df_combined = combined_df.copy()
-    df_combined.columns = df_combined.columns.str.upper()
-    ########################################################################
-    ############################## Numericals ##############################
-    ########################################################################
-    df_combined["AGE"] = df_combined["AGE"].replace({"90+": "90"})
-    df_combined[num_cols] = df_combined[num_cols].astype(float)
-    df_combined[num_cols] = df_combined[num_cols].mask(
-        df_combined[num_cols] < 0, np.nan
-    )
-    ########################################################################
-    ############################## Other stuff ##############################
-    ########################################################################
-    na_drop_cols = [col.upper() for col in na_drop_cols]
-    recon_cols = [col.upper() for col in recon_cols]
-    mast_cols = [col.upper() for col in mast_cols]
-    surg_ind_cols = [col.upper() for col in surg_ind_cols]
-
-    # Remove leading/trailing 0s
-    string_cols = df_combined.select_dtypes(include=["object"]).columns
-    for col in string_cols:
-        df_combined[col] = df_combined[col].astype(str).str.strip()
-        df_combined[col] = df_combined[col].replace({"None": None})
-    ## Remove CPT/ICD cols
-    df_combined = df_combined.drop(drop_cols, axis=1)
-    ########################################################################
-    ###################### Normalize instances names #######################
-    ########################################################################
-    print("Normalizing instances...")
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", category=FutureWarning, message=".*Downcasting behavior.*"
-        )
-        df_replaced = df_combined.replace(replace_dict).infer_objects(copy=False).copy()
-    ########################################################################
-    ############################ Deal with NAs #############################
-    ########################## + further cleaning ##########################
-    ########################################################################
-    print("Dealing with NAs...")
-    #### MORTALITY -->
-    df_replaced.rename(columns={"YRDEATH": "MORTALITY"}, inplace=True)
-    # Make all non-"No"s into yes
-    df_replaced["MORTALITY"] = np.where(df_replaced["MORTALITY"] == "No", "No", "Yes")
-    # add in DISCHDEST "expired" instances
-    df_replaced["MORTALITY"] = np.where(
-        (df_replaced["MORTALITY"] == "Yes") | (df_replaced["DISCHDEST"] == "Expired"),
-        "Yes",
-        df_replaced["MORTALITY"],
-    )
-    #### UNPLREOP --> IF died, make NAs No...otherwise drop (in code below)
-    unplreop_mask = (df_replaced["MORTALITY"] == "Yes") & (
-        df_replaced["UNPLREOP"].isna()
-    )
-    df_replaced.loc[unplreop_mask, "UNPLREOP"] = "No"
-    ## Remove remaining NAs + other col NAs
-    df_replaced = df_replaced.dropna(subset=na_drop_cols, ignore_index=True)
-    ## Rename RACE_NEW to RACE
-    df_replaced = df_replaced.rename(columns={"RACE_NEW": "RACE"})
-    ########################################################################
-    ######## change "No"s to NULL if not recorded for a given year ########
-    ########################################################################
-    # READ --> not recorded 08-10
-    df_replaced.loc[
-        (df_replaced["READ"] == "No") & df_replaced["OPERYR"].between(2008, 2010),
-        "READ",
-    ] = "Unknown(08-10)"
-    # UNPLREAD --> 08-11
-    df_replaced.loc[
-        (df_replaced["UNPLREAD"] == "No") & df_replaced["OPERYR"].between(2008, 2011),
-        "UNPLREAD",
-    ] = "Unknown(08-11)"
-    # RENAINSF --> 21
-    df_replaced.loc[
-        (df_replaced["RENAINSF"] == "No") & (df_replaced["OPERYR"].astype(int) == 2021),
-        "RENAINSF",
-    ] = "Unknown(21)"
-    # RENAFAIL --> 21
-    df_replaced.loc[
-        (df_replaced["RENAFAIL"] == "No") & (df_replaced["OPERYR"].astype(int) == 2021),
-        "RENAFAIL",
-    ] = "Unknown(21)"
-    # WTLOSS --> 21-24
-    df_replaced.loc[
-        (df_replaced["WTLOSS"] == "No") & df_replaced["OPERYR"].between(2021, 2024),
-        "WTLOSS",
-    ] = "Unknown(21-24)"
-    # WNDINF --> 21-24
-    df_replaced.loc[
-        (df_replaced["WNDINF"] == "No") & df_replaced["OPERYR"].between(2021, 2024),
-        "WNDINF",
-    ] = "Unknown(21-24)"
-    # DYSPNEA --> 21-24
-    df_replaced.loc[
-        (df_replaced["DYSPNEA"] == "No") & df_replaced["OPERYR"].between(2021, 2024),
-        "DYSPNEA",
-    ] = "Unknown(21-24)"
-
-    ########################################################################
-    ########################## Create new columns ##########################
-    ########################################################################
-    print("Creating new cols...")
-    ##Lymph Node Surgery
-    df_replaced["NOLYMPH"] = (
-        (df_replaced["SNLBCPT"] == "0") & (df_replaced["ALNDCPT"] == "0")
-    ).astype(int)
-    ######## Timing of Surgery ########
-    ## Create 3 new colunns
-    count_of_ones_mast = df_replaced[mast_cols].astype(str).ne("0").sum(axis=1)
-    count_of_ones_recon = df_replaced[recon_cols].astype(str).ne("0").sum(axis=1)
-    df_replaced["MASTONLY"] = (
-        (count_of_ones_mast >= 1) & (count_of_ones_recon == 0)
-    ).astype(int)
-    df_replaced["MASTRECON"] = (
-        (count_of_ones_mast >= 1) & (count_of_ones_recon >= 1)
-    ).astype(int)
-    df_replaced["RECONONLY"] = (
-        (count_of_ones_mast == 0) & (count_of_ones_recon >= 1)
-    ).astype(int)
-    ## Create single timing of surgery categorical column
-    procedure_cols = ["MASTONLY", "MASTRECON", "RECONONLY"]
-    # Ensure mutually exclusive
-    assert len(df_replaced[procedure_cols].eq(1).sum(axis=1).value_counts()) == 1
-    # Ensure all patients fall into 1 category
-    assert df_replaced[procedure_cols].eq(1).sum(axis=1).value_counts().keys() == 1
-    # except AssertionError:
-    #     print(df_replaced[procedure_cols].eq(1).sum(axis=1).value_counts().keys())
-    #     return df_replaced
-    df_replaced["SURGTIMINGCPT"] = df_replaced[procedure_cols].idxmax(axis=1)
-    df_replaced = df_replaced.drop(columns=procedure_cols, axis=1)
-    ######## Surgical Indication (ICD) ########
-    # Create single surgical indication (ICD) column
-    ## Ensure mutually exclusive
-    assert len(df_replaced[surg_ind_cols].eq(1).sum(axis=1).value_counts()) == 1
-    assert df_replaced[surg_ind_cols].eq(1).sum(axis=1).value_counts().keys() == 1
-    ## Combine
-    df_replaced["SURGINDICD"] = df_replaced[surg_ind_cols].idxmax(axis=1)
-    df_replaced = df_replaced.drop(columns=surg_ind_cols, axis=1)
-    ########################################################################
-    ############### Make binary columns all 1/0 ################
-    ########################################################################
-    ### Replace yes/no with 1/0
-    binary_cols = get_feature_lists(df_replaced)["binary_cols"]
-    replace_w_binary_cols = [
-        col
-        for col in binary_cols
-        if "Yes" in df_replaced[col].unique() and "No" in df_replaced[col].unique()
-    ]
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", category=FutureWarning, message=".*Downcasting behavior.*"
-        )
-        df_replaced[replace_w_binary_cols] = (
-            df_replaced[replace_w_binary_cols]
-            .replace({"Yes": 1, "No": 0})
-            .infer_objects(copy=False)
-            .copy()
-        )
-        ### CHange others
-        df_replaced["ETHNICITY_HISPANIC"] = df_replaced["ETHNICITY_HISPANIC"].replace(
-            {"Yes": 1, "noUnknown": 0}
-        )
-        df_replaced["INOUT"] = df_replaced["INOUT"].replace(
-            {"Inpatient": 1, "Outpatient": 0}
-        )
-        df_replaced["URGENCY"] = df_replaced["URGENCY"].replace(
-            {"Urgent": 1, "Elective": 0}
-        )
-    return df_replaced
 
 
 ##############################################################################
