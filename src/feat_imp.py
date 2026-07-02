@@ -247,7 +247,7 @@ def get_raw_shap(
             shap_batch = explainer(
                 batch,
                 silent=False,  # True for progress bar
-                l1_reg=0,  # will sometimes (stack) produce all-zero SHAP estimates w/o this
+                l1_reg=0,  # will sometimes (stack) produce all-zero SHAP estimates w/o this # type: ignore
             )
             explanations.append(shap_batch)
             log(f"KernelExplainer progress: {end}/{n} rows ({end/n:.1%})")
@@ -427,7 +427,7 @@ def get_shap_single_model(
     # ==============> Load data + models
     explanation_vals = import_data(explanation_vals_path)
     background_vals = import_data(background_vals_path)
-    in_dim = explanation_vals.shape[1]
+    in_dim = explanation_vals.shape[1]  # type: ignore
     model = import_data(model_path, in_dim=in_dim)
     log("\t Data + model loaded!")
     # ==============> RAW SHAP

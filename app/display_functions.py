@@ -1178,9 +1178,6 @@ def show_clinical_results(display_name, folder_name, input_data):
                         condition was absent. Missing documentation can still influence predictions because it occurred systematically
                         across certain time periods rather than at random.
 
-                        - **Year of operation** may appear important because it captures broader temporal trends—such as evolving
-                        surgical techniques, perioperative care pathways, patient selection, or documentation practices.
-
                         - Unexpected results should be interpreted as a prompt to consider clinical context (e.g., documentation patterns,
                         case complexity, or interacting factors) and to apply clinical judgment, rather than as evidence that a factor
                         directly causes the outcome.
@@ -1210,7 +1207,8 @@ def show_clinical_results(display_name, folder_name, input_data):
                 n_feats = st.number_input(
                     "Number of top features to display",
                     min_value=5,
-                    max_value=input_data.shape[1],
+                    # Combined Hieght/Weight into BMI lowers this by 1
+                    max_value=(input_data.shape[1] - 1),
                     value=10,
                     step=1,
                     key=f"n_feats_{folder_name}",

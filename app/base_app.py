@@ -33,7 +33,7 @@ def main():
     )
     init_session_state()
     st.title(
-        "PRO-BREAST: Post-resection and Reconstruction Outcome prediction for Breast surgery"
+        "PRO-BREAST: Post-resection and Reconstruction Outcome prediction for Breast cancer surgery"
     )
     st.markdown(
         "Predict 30-day complications after mastectomy alone, mastectomy with immediate reconstruction, and delayed breast reconstruction/revision."
@@ -57,7 +57,7 @@ def main():
                     • Malignant Neoplasm (174, 175, C50)
             """)
     with col2:
-        with st.expander("**Reconstruction Procedures**", expanded=False):
+        with st.expander("**Procedures**", expanded=False):
             st.markdown("""
                 At least one of the following procedure designations, grouped for convenience:
                 
@@ -119,16 +119,16 @@ def main():
     #################################################################################################################
     outcome_info_dict = {
         "SERIOUS": """ 
-            Patients classified as having a serious complication experienced at least one of the following within 30 days postoperatively: 
+            Patients classified as having a **serious complication** experienced at least one of the following within 30 days postoperatively: 
             
             any occurrence of Cardiac arrest, Myocardial infarction, Pneumonia, Progressive renal insufficiency, Acute renal failure, 
             Pulmonary embolism, Venous thrombosis, Unplanned reoperation, Deep incisional surgical site infection (SSI), 
             Organ space SSI, Sepsis, Unplanned intubation, Urinary tract infection, or Dehiscence
         """,
         "ANY": """ 
-            Patients classified as having any complication experienced at least one of the following within 30 days postoperatively: 
+            Patients classified as having **any complication** experienced at least one of the following within 30 days postoperatively: 
             
-            Cardiac arrest, Myocardial infarction, Pneumonia, *Progressive renal insufficiency, Acute renal failure, Pulmonary embolism, 
+            Cardiac arrest, Myocardial infarction, Pneumonia, Progressive renal insufficiency, Acute renal failure, Pulmonary embolism, 
             Venous thrombosis, Unplanned reoperation, Deep incisional SSI, Organ space SSI, Sepsis, Unplanned intubation, 
             Urinary tract infection, Dehiscence, Superficial SSI, Ventilator > 48H, or Stroke
         """,
@@ -142,7 +142,7 @@ def main():
             &nbsp;&nbsp;&nbsp;&nbsp;•**Organ/space SSI** (infection involving any organ or space opened or manipulated during the operation, excluding the incision itself).
         """,
         "UNPLNREOP": """
-            Any unplanned return to the operating room for a surgical procedure related to the index or concurrent
+            Any **unplanned return to the operating room** for a surgical procedure related to the index or concurrent
             procedure within 30 days, at any facility; planned/staged procedures are excluded.
         """,
     }
